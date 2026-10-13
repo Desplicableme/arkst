@@ -12,6 +12,7 @@ Handles:
 """
 
 import os
+import io
 import re
 import sys
 import glob
@@ -29,7 +30,23 @@ import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any, Callable
 
-CACHE_DIR = Path.home() / ".cache" / "aura"
+def _resolve_writable_dir(preferred: Path, fallback_name: str) -> Path:
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred
+    except Exception:
+        fb = Path(tempfile.gettempdir()) / f"aura-{os.getuid()}-{fallback_name}"
+        fb.mkdir(parents=True, exist_ok=True)
+        return fb
+
+CACHE_DIR = _resolve_writable_dir(
+    Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "aura",
+    "cache"
+)
+DATA_DIR = _resolve_writable_dir(
+    Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "aura",
+    "data"
+)
 CACHE_FILE = CACHE_DIR / "sync_cache.pkl"
 UPDATES_CACHE_FILE = CACHE_DIR / "updates_cache.json"
 FEATURED_STATE_FILE = CACHE_DIR / "featured_state.json"
@@ -223,6 +240,26 @@ CURATED_CATEGORIES = [
             {"name": "obs-studio", "title": "OBS Studio", "desc": "Capture, stream, and record your gameplay", "source": "pacman"},
             {"name": "gamemode", "title": "GameMode", "desc": "Optimizes Linux system performance on demand", "source": "pacman"},
             {"name": "ryujinx-bin", "title": "Ryujinx", "desc": "Experimental Nintendo Switch emulator written in C#", "source": "aur"},
+        ]
+    },
+    {
+        "id": "hyprland",
+        "category": "Hyprland Ecosystem",
+        "subtitle": "Wayland bars, lockscreens, launchers, wallpaper daemons, and tiling utilities",
+        "icon": "preferences-desktop-display-symbolic",
+        "apps": [
+            {"name": "waybar", "title": "Waybar", "desc": "Highly customizable Wayland bar for Hyprland and Sway", "source": "pacman"},
+            {"name": "rofi-wayland", "title": "Rofi Wayland", "desc": "Window switcher, app launcher, and dmenu replacement for Wayland", "source": "pacman"},
+            {"name": "hyprpaper", "title": "Hyprpaper", "desc": "Blazing fast IPC-controlled wallpaper utility for Hyprland", "source": "pacman"},
+            {"name": "hyprlock", "title": "Hyprlock", "desc": "GPU-accelerated screen locking utility for Hyprland", "source": "pacman"},
+            {"name": "hypridle", "title": "Hypridle", "desc": "Hyprland's official idle management daemon", "source": "pacman"},
+            {"name": "hyprpicker", "title": "Hyprpicker", "desc": "wlroots-compatible Wayland color picker that does not suck", "source": "pacman"},
+            {"name": "swaync", "title": "SwayNotificationCenter", "desc": "GTK notification daemon with customizable control center panel", "source": "pacman"},
+            {"name": "swww", "title": "swww Wallpaper Daemon", "desc": "Efficient animated wallpaper daemon for Wayland compositors", "source": "pacman"},
+            {"name": "wlogout", "title": "wlogout", "desc": "Wayland-based logout and session power menu for Hyprland", "source": "aur"},
+            {"name": "nwg-look", "title": "nwg-look GTK Settings", "desc": "GTK3/GTK4 theme, icon, cursor, and font editor for Wayland", "source": "pacman"},
+            {"name": "nwg-displays", "title": "nwg-displays Monitors", "desc": "Multi-monitor layout and resolution configurator for Hyprland", "source": "pacman"},
+            {"name": "grim", "title": "Grim & Slurp Screenshots", "desc": "Capture crisp Wayland screenshots and region selections", "source": "pacman"},
         ]
     }
 ]
@@ -975,6 +1012,7 @@ CATEGORY_TAG_DEFAULTS: Dict[str, str] = {
     "productivity": "EDITORS' CHOICE",
     "system": "SYSTEM SPOTLIGHT",
     "essential": "COMMUNITY FAVORITE",
+    "hyprland": "HYPRLAND ECOSYSTEM",
 }
 
 CATEGORY_ACCENT_DEFAULTS: Dict[str, str] = {
@@ -985,6 +1023,7 @@ CATEGORY_ACCENT_DEFAULTS: Dict[str, str] = {
     "productivity": "#18a058",
     "system": "#ff5370",
     "essential": "#30d158",
+    "hyprland": "#00c8ff",
 }
 
 def _color_to_gradient_and_border(hex_color: str, alpha_bg: float = 0.24, alpha_border: float = 0.42) -> Tuple[str, str]:
@@ -1113,6 +1152,37 @@ APP_DISPLAY_NAMES: Dict[str, str] = {
     "gamemode": "GameMode",
     "ryujinx-bin": "Ryujinx",
     "ryujinx": "Ryujinx",
+    "waybar": "Waybar",
+    "rofi-wayland": "Rofi Wayland",
+    "wofi": "Wofi Launcher",
+    "fuzzel": "Fuzzel Launcher",
+    "hyprpaper": "Hyprpaper",
+    "hyprlock": "Hyprlock",
+    "hypridle": "Hypridle",
+    "hyprpicker": "Hyprpicker",
+    "hyprshot": "Hyprshot",
+    "hyprsunset": "Hyprsunset",
+    "hyprpolkitagent": "Hyprpolkitagent",
+    "swaync": "SwayNotificationCenter",
+    "swww": "swww Wallpaper Daemon",
+    "wlogout": "wlogout Power Menu",
+    "nwg-look": "nwg-look Theme Settings",
+    "nwg-displays": "nwg-displays Monitor Manager",
+    "grim": "Grim Wayland Screenshot",
+    "slurp": "Slurp Region Selector",
+    "swappy": "Swappy Screenshot Editor",
+    "cliphist": "Cliphist Clipboard Manager",
+    "wl-clipboard": "Wayland Clipboard Utilities",
+    "mako": "Mako Notification Daemon",
+    "dunst": "Dunst Notification Daemon",
+    "brightnessctl": "Brightnessctl",
+    "playerctl": "Playerctl Media Controller",
+    "blueman": "Blueman Bluetooth Manager",
+    "nm-connection-editor": "NetworkManager Connection Editor",
+    "qt5ct": "Qt5 Configuration Tool",
+    "qt6ct": "Qt6 Configuration Tool",
+    "kvantum": "Kvantum SVG Theme Engine",
+    "xdg-desktop-portal-hyprland": "XDG Desktop Portal Hyprland",
 }
 
 APP_EXTENDED_DESCRIPTIONS: Dict[str, str] = {
@@ -1265,6 +1335,37 @@ APP_EXTENDED_DESCRIPTIONS: Dict[str, str] = {
     "pavucontrol": (
         "PulseAudio Volume Control (pavucontrol) provides a detailed mixer interface to configure audio volume levels, "
         "device routing, and per-application playback and recording streams."
+    ),
+    "waybar": (
+        "Waybar is a highly customizable status bar for wlroots and Hyprland Wayland compositors. "
+        "Features native Hyprland workspace indicators, window title modules, PipeWire audio controls, battery/network telemetry, and full CSS styling."
+    ),
+    "rofi-wayland": (
+        "Rofi Wayland is a fast window switcher, application launcher, ssh dialog, and dmenu replacement built with native Wayland layer-shell support for Hyprland."
+    ),
+    "hyprpaper": (
+        "Hyprpaper is a blazing fast, IPC-controlled wallpaper utility for Hyprland enabling instant per-monitor preloading and dynamic switching."
+    ),
+    "hyprlock": (
+        "Hyprlock is Hyprland's official GPU-accelerated screen locking utility featuring blurred backgrounds, custom input fields, and dynamic labels."
+    ),
+    "hypridle": (
+        "Hypridle is Hyprland's official idle management daemon supporting ext-idle-notify-v1, D-Bus inhibit locks, and automatic screen blanking/locking."
+    ),
+    "hyprpicker": (
+        "Hyprpicker is a wlroots-compatible Wayland color picker that freezes the screen and magnifies pixels to copy exact HEX/RGB/HSL values."
+    ),
+    "swaync": (
+        "SwayNotificationCenter (swaync) is a modern GTK notification daemon and slide-out control center panel for Wayland compositors."
+    ),
+    "swww": (
+        "swww is an efficient animated wallpaper daemon for Wayland compositors supporting smooth transition shaders, GIFs, and multi-monitor outputs."
+    ),
+    "nwg-look": (
+        "nwg-look is a GTK3/GTK4 appearance settings editor designed specifically for Wayland compositors like Hyprland, exporting gsettings and settings.ini."
+    ),
+    "nwg-displays": (
+        "nwg-displays is an intuitive graphical multi-monitor output management utility for Hyprland and Sway that generates monitor configuration rules."
     ),
 }
 
@@ -1632,6 +1733,32 @@ def resolve_icon_name(pkg_name: str, desc: str = "") -> str:
         "gamemode": "preferences-system",
         "ryujinx-bin": "ryujinx",
         "ryujinx": "ryujinx",
+        "waybar": "preferences-desktop-display",
+        "rofi-wayland": "system-search",
+        "wofi": "system-search",
+        "fuzzel": "system-search",
+        "hyprpaper": "preferences-desktop-wallpaper",
+        "swww": "preferences-desktop-wallpaper",
+        "hyprlock": "system-lock-screen",
+        "hypridle": "preferences-system-power",
+        "hyprpicker": "color-select",
+        "hyprshot": "applets-screenshooter",
+        "grim": "applets-screenshooter",
+        "slurp": "applets-screenshooter",
+        "swappy": "applets-screenshooter",
+        "swaync": "preferences-system-notifications",
+        "mako": "preferences-system-notifications",
+        "dunst": "preferences-system-notifications",
+        "wlogout": "system-log-out",
+        "nwg-look": "preferences-desktop-theme",
+        "nwg-displays": "preferences-desktop-display",
+        "cliphist": "edit-paste",
+        "wl-clipboard": "edit-paste",
+        "blueman": "preferences-system-bluetooth",
+        "nm-connection-editor": "preferences-system-network",
+        "qt5ct": "preferences-desktop-theme",
+        "qt6ct": "preferences-desktop-theme",
+        "kvantum": "preferences-desktop-theme",
     }
     if name in overrides:
         return overrides[name]
@@ -1948,7 +2075,88 @@ def fuzzy_score(
     return 0
 
 
+
+SAFE_PKG_NAME_RE = re.compile(r'^[a-zA-Z0-9@._+][a-zA-Z0-9@._+-]{0,127}$')
+
+CRITICAL_SYSTEM_PACKAGES: Set[str] = {
+    "base", "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-cachyos",
+    "glibc", "gcc-libs", "filesystem", "bash", "coreutils", "systemd", "systemd-libs",
+    "systemd-sysvcompat", "pacman", "sudo", "shadow", "util-linux", "iproute2",
+    "dbus", "openssl", "krb5", "pam", "ncurses", "readline", "zlib", "zstd",
+}
+
+
+def is_valid_pkg_name(pkg_name: str) -> bool:
+    """
+    Validate package identifier against command/option injection, path traversal,
+    null bytes, whitespace, and oversized inputs (AURA-SEC-001).
+    """
+    if not pkg_name or not isinstance(pkg_name, str):
+        return False
+    s = pkg_name.strip()
+    if not s or len(s) > 128:
+        return False
+    if s.startswith("-") or s.startswith(".") or ".." in s or "/" in s or "\\" in s or "\x00" in s:
+        return False
+    if any(ch.isspace() or ord(ch) < 32 for ch in s):
+        return False
+    return bool(SAFE_PKG_NAME_RE.match(s))
+
+
 ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+# Global re-entrant lock serializing all in-process operations that touch /var/lib/pacman/db.lck
+GLOBAL_ALPM_LOCK = threading.RLock()
+
+
+def wait_for_alpm_lock(progress_cb: Optional[Callable[[float, str], None]] = None, max_wait: int = 240, env: Optional[Dict[str, str]] = None) -> bool:
+    """
+    Wait safely for /var/lib/pacman/db.lck to be released by any external package manager.
+    If /var/lib/pacman/db.lck exists and NO pacman/paru/yay/makepkg process is running,
+    automatically removes the stale lock file so transactions never fail due to an orphaned lock.
+    """
+    lock_file = Path("/var/lib/pacman/db.lck")
+    if not lock_file.exists():
+        return True
+
+    run_env = env or os.environ.copy()
+    askpass = get_askpass_script()
+    if askpass.exists():
+        run_env["SUDO_ASKPASS"] = str(askpass)
+    run_env["LC_ALL"] = "C"
+
+    waited = 0.0
+    while lock_file.exists() and waited < max_wait:
+        active_procs = []
+        for pname in ("pacman", "paru", "yay", "makepkg"):
+            try:
+                r = subprocess.run(["pgrep", "-x", pname], capture_output=True, text=True, timeout=2)
+                if r.returncode == 0 and r.stdout.strip():
+                    active_procs.append(pname)
+            except Exception:
+                pass
+
+        if not active_procs:
+            if progress_cb:
+                try:
+                    progress_cb(0.06, "Clearing stale Pacman database lock (/var/lib/pacman/db.lck)...")
+                except Exception:
+                    pass
+            res = subprocess.run(["sudo", "-n", "rm", "-f", str(lock_file)], stdin=subprocess.DEVNULL, capture_output=True, env=run_env, timeout=5)
+            if res.returncode != 0 and lock_file.exists():
+                subprocess.run(["sudo", "-A", "rm", "-f", str(lock_file)], stdin=subprocess.DEVNULL, capture_output=True, env=run_env, timeout=20)
+            return not lock_file.exists()
+
+        if progress_cb:
+            try:
+                progress_cb(0.06, f"Waiting for {', '.join(active_procs)} to release database lock...")
+            except Exception:
+                pass
+        time.sleep(1.0)
+        waited += 1.0
+
+    return not lock_file.exists()
+
 
 
 class PacmanProgressParser:
@@ -2169,6 +2377,72 @@ class PacmanProgressParser:
 
             return (prog, dl_msg, dl_pkg or self.current_pkg, dl_count, self.total_packages)
 
+        # 6. AUR (paru / yay / makepkg) build stages
+        if ":: fetching" in l_lower or "cloning" in l_lower or "downloading pkgbuilds" in l_lower:
+            prog = max(self.last_progress, 0.12)
+            self.last_progress = prog
+            return (prog, f"Fetching AUR build files for {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> making package:" in l_lower:
+            prog = max(self.last_progress, 0.18)
+            self.last_progress = prog
+            return (prog, f"Preparing AUR package build for {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> retrieving sources" in l_lower:
+            prog = max(self.last_progress, 0.25)
+            self.last_progress = prog
+            return (prog, f"Downloading upstream sources for {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> validating source" in l_lower or "sha256sums" in l_lower or "sha512sums" in l_lower or "b2sums" in l_lower:
+            prog = max(self.last_progress, 0.34)
+            self.last_progress = prog
+            return (prog, "Validating source checksums & integrity...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> extracting sources" in l_lower:
+            prog = max(self.last_progress, 0.42)
+            self.last_progress = prog
+            return (prog, f"Extracting source archives for {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> starting prepare()" in l_lower:
+            prog = max(self.last_progress, 0.48)
+            self.last_progress = prog
+            return (prog, f"Preparing source tree for {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> starting build()" in l_lower or "compiling" in l_lower:
+            prog = max(self.last_progress, 0.58)
+            self.last_progress = prog
+            return (prog, f"Compiling {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> entering fakeroot" in l_lower or "==> starting package" in l_lower:
+            prog = max(self.last_progress, 0.72)
+            self.last_progress = prog
+            return (prog, f"Packaging {self.target_disp} files...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> tidying install" in l_lower or "==> creating package" in l_lower:
+            prog = max(self.last_progress, 0.82)
+            self.last_progress = prog
+            return (prog, f"Compressing {self.target_disp} package archive...", self.current_pkg, self.current_idx, self.total_packages)
+
+        if "==> finished making:" in l_lower:
+            prog = max(self.last_progress, 0.86)
+            self.last_progress = prog
+            return (prog, f"Build complete, installing {self.target_disp}...", self.current_pkg, self.current_idx, self.total_packages)
+
+        # 7. Live percentage lines from pacman / curl / makepkg (CR carriage return updates)
+        m_pct = re.search(r'(\d{1,3})%', clean)
+        if m_pct:
+            pct_val = min(99, max(1, int(m_pct.group(1))))
+            if self.last_progress < 0.28:
+                mapped = round(0.08 + (pct_val / 100.0) * 0.20, 4)
+                prog = max(self.last_progress, mapped)
+                self.last_progress = prog
+                return (prog, f"Downloading {self.target_disp} ({pct_val}%)...", self.current_pkg, self.current_idx, self.total_packages)
+            elif self.last_progress < 0.88:
+                mapped = round(0.28 + (pct_val / 100.0) * 0.58, 4)
+                prog = max(self.last_progress, mapped)
+                self.last_progress = prog
+                return (prog, f"{self.get_action_verb()} {self.target_disp} ({pct_val}%)...", self.current_pkg, self.current_idx, self.total_packages)
+
         return None
 
     def get_completion_message(self) -> str:
@@ -2201,10 +2475,15 @@ class PackageManager:
             except Exception:
                 pass
         self._lock = threading.Lock()
+        self._db_load_lock = threading.Lock()
         self._aur_cache: Dict[str, List[Dict[str, Any]]] = {}
         self.is_loaded = False
         self.active_transaction: Optional[Dict[str, Any]] = None
         self._pending_actions: List[Dict[str, Any]] = []
+        self._active_snap_tx: Optional[Dict[str, Any]] = None
+        self._pending_snap_actions: List[Dict[str, Any]] = []
+        self._active_docker_tx: Optional[Dict[str, Any]] = None
+        self._pending_docker_actions: List[Dict[str, Any]] = []
         self._last_progress: float = 0.0
         self._action_lock = threading.RLock()
         self._update_generation: int = 0
@@ -2214,6 +2493,18 @@ class PackageManager:
         self.container_mgr = ContainerManager()
         self.snap_mgr = SnapManager()
         self.cache_mgr = CacheManager()
+        self._desktop_owner_map: Dict[str, str] = {}
+        self._binary_owner_map: Dict[str, str] = {}
+        self._pkg_files_map: Dict[str, List[str]] = {}
+        self._provides_map: Dict[str, str] = {}
+        self._resolved_pkg_cache: Dict[str, str] = {}
+        self._installed_desktop_apps_cache: Optional[List[Dict[str, Any]]] = None
+        self._local_files_mtime: float = 0.0
+        self.last_transaction_logs: List[str] = []
+        self.clean_uninstall_default: bool = True
+        self.deb_mgr = DebPackageManager(self)
+        self.hypr_mgr = HyprlandManager(self)
+        self.doctor_mgr = SystemDoctor(self)
         # Load installed packages synchronously so cards immediately reflect installed status
         self.refresh_installed()
         # Persistent rotating featured apps state
@@ -2236,10 +2527,72 @@ class PackageManager:
                 pass
         threading.Thread(target=_prewarm_managers, daemon=True).start()
 
-    def refresh_installed(self):
-        """Quickly reload the list of installed packages and their versions."""
+    def _index_local_pacman_files(self):
+        """
+        Scan /var/lib/pacman/local/*/files to build an authoritative O(1) mapping from
+        every installed .desktop file and /usr/bin executable to its exact owning package name.
+        """
+        local_dir = Path("/var/lib/pacman/local")
+        if not local_dir.exists():
+            return
+        dt_owners: Dict[str, str] = {}
+        bin_owners: Dict[str, str] = {}
+        pkg_files: Dict[str, List[str]] = {}
         try:
-            res = subprocess.run(["pacman", "-Q"], capture_output=True, text=True, check=True)
+            for entry in os.scandir(local_dir):
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                # Directory name is <pkgname>-<pkgver>-<pkgrel>
+                parts = entry.name.rsplit("-", 2)
+                if len(parts) < 3:
+                    continue
+                pkgname = parts[0].lower()
+                files_path = Path(entry.path) / "files"
+                if not files_path.exists():
+                    continue
+                try:
+                    raw = files_path.read_text(encoding="utf-8", errors="ignore")
+                    owned_list = []
+                    for line in raw.splitlines():
+                        s = line.strip()
+                        if not s or s.startswith("%") or s.endswith("/"):
+                            continue
+                        owned_list.append(s)
+                        s_low = s.lower()
+                        if s_low.endswith(".desktop") and "applications/" in s_low:
+                            base = os.path.basename(s_low)
+                            stem = base[:-8]  # strip .desktop
+                            dt_owners[stem] = pkgname
+                            dt_owners[base] = pkgname
+                            if "." in stem:
+                                tail = stem.split(".")[-1]
+                                if tail not in ("desktop", "app", "studio", "launcher", "client") and tail not in dt_owners:
+                                    dt_owners[tail] = pkgname
+                        elif s_low.startswith("usr/bin/"):
+                            bname = os.path.basename(s_low)
+                            if bname:
+                                bin_owners[bname] = pkgname
+                    pkg_files[pkgname] = owned_list
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        with self._lock:
+            self._desktop_owner_map = dt_owners
+            self._binary_owner_map = bin_owners
+            self._pkg_files_map = pkg_files
+
+    def refresh_installed(self):
+        """Quickly reload the list of installed packages, their versions, and file ownership maps."""
+        try:
+            if not hasattr(self, "_resolved_pkg_cache"):
+                self._resolved_pkg_cache = {}
+            if not hasattr(self, "_provides_map"):
+                self._provides_map = {}
+            self._resolved_pkg_cache.clear()
+            self._installed_desktop_apps_cache = None
+
+            res = subprocess.run(["pacman", "-Q"], capture_output=True, text=True, check=True, timeout=8)
             installed = {}
             for line in res.stdout.splitlines():
                 parts = line.strip().split()
@@ -2248,6 +2601,33 @@ class PackageManager:
             with self._lock:
                 self.installed_versions = installed
                 self.installed_set = set(installed.keys())
+
+            # Rebuild O(1) provides map for installed packages
+            prov_map: Dict[str, str] = {}
+            pkgs_ref = getattr(self, "packages", {}) or {}
+            for inst_pkg in self.installed_set:
+                p_data = pkgs_ref.get(inst_pkg)
+                if p_data:
+                    for p in p_data.get("provides", []):
+                        p_clean = p.split("=")[0].split(">")[0].split("<")[0].strip().lower()
+                        if p_clean and p_clean not in prov_map:
+                            prov_map[p_clean] = inst_pkg
+            self._provides_map = prov_map
+
+            # Only re-index /var/lib/pacman/local/*/files if directory mtime changed, and run in background if already populated
+            local_dir = Path("/var/lib/pacman/local")
+            cur_mtime = 0.0
+            try:
+                if local_dir.exists():
+                    cur_mtime = local_dir.stat().st_mtime
+            except Exception:
+                pass
+            if not getattr(self, "_desktop_owner_map", None):
+                self._local_files_mtime = cur_mtime
+                self._index_local_pacman_files()
+            elif cur_mtime != getattr(self, "_local_files_mtime", 0.0):
+                self._local_files_mtime = cur_mtime
+                threading.Thread(target=self._index_local_pacman_files, daemon=True).start()
 
             # Invalidate desktop launcher cache so newly installed apps are detected immediately
             global _DESKTOP_ICONS_CACHE, _DESKTOP_NAMES_CACHE, _DESKTOP_ENTRIES_CACHE
@@ -2259,51 +2639,140 @@ class PackageManager:
 
     def resolve_installed_pkg_name(self, name: str) -> str:
         """
-        Resolve base application names or aliases to exact installed package names on Arch Linux.
-        Handles -bin, -desktop-bin, -desktop, -git suffixes, desktop overrides, and package provides.
+        Resolve any application name, .desktop stem (e.g. org.telegram.desktop, com.obsproject.Studio),
+        binary name, or alias to its exact installed package name on Arch Linux in O(1) cached time.
         """
-        if not name:
+        if not name or not isinstance(name, str):
             return ""
-        n_low = name.strip().lower()
+        raw_low = name.strip().lower()
+        cache = getattr(self, "_resolved_pkg_cache", None)
+        if cache is not None and raw_low in cache:
+            return cache[raw_low]
+        n_low = raw_low[:-8] if (raw_low.endswith(".desktop") and raw_low not in ("org.telegram.desktop", "telegram-desktop", "signal-desktop", "joplin-desktop", "github-desktop")) else raw_low
+
+        # 1. Exact match in installed_set
         if n_low in self.installed_set:
             return n_low
-        if f"{n_low}-bin" in self.installed_set:
-            return f"{n_low}-bin"
-        if f"{n_low}-desktop-bin" in self.installed_set:
-            return f"{n_low}-desktop-bin"
-        if f"{n_low}-desktop" in self.installed_set:
-            return f"{n_low}-desktop"
-        if f"{n_low}-git" in self.installed_set:
-            return f"{n_low}-git"
 
-        # Explicit aliases
+        # 2. Check authoritative /var/lib/pacman/local/*/files desktop & binary owner maps
+        if hasattr(self, "_desktop_owner_map") and n_low in self._desktop_owner_map:
+            owner = self._desktop_owner_map[n_low]
+            if owner in self.installed_set:
+                return owner
+        if hasattr(self, "_binary_owner_map") and n_low in self._binary_owner_map:
+            owner = self._binary_owner_map[n_low]
+            if owner in self.installed_set:
+                return owner
+
+        # 3. Common suffix variants
+        for suf in ("-bin", "-desktop-bin", "-desktop", "-git", "-gtk-app", "-qt-app", "-fresh", "-still", "-launcher", "-wayland"):
+            if f"{n_low}{suf}" in self.installed_set:
+                return f"{n_low}{suf}"
+
+        # 4. Comprehensive explicit aliases (including reverse-DNS .desktop stems)
         aliases = {
             "chatgpt": ["chatgpt-bin", "chatgpt-desktop-bin"],
-            "code": ["visual-studio-code-bin", "code", "code-oss"],
+            "code": ["visual-studio-code-bin", "code", "code-oss", "vscodium-bin", "vscodium"],
+            "code-oss": ["code", "visual-studio-code-bin", "code-oss"],
+            "visual-studio-code": ["visual-studio-code-bin", "code"],
             "brave": ["brave-bin", "brave-origin-bin", "brave"],
+            "brave-browser": ["brave-bin", "brave-origin-bin", "brave"],
+            "google-chrome": ["google-chrome", "google-chrome-stable", "google-chrome-beta"],
+            "chrome": ["google-chrome", "chromium"],
             "spotify": ["spotify", "spotify-launcher"],
+            "spotify-client": ["spotify", "spotify-launcher"],
             "heroic": ["heroic-games-launcher-bin", "heroic"],
+            "com.heroicgameslauncher.hgl": ["heroic-games-launcher-bin", "heroic"],
             "postman": ["postman-bin", "postman"],
+            "telegram": ["telegram-desktop", "telegram-desktop-bin"],
+            "org.telegram.desktop": ["telegram-desktop", "telegram-desktop-bin"],
+            "obs": ["obs-studio", "obs-studio-git", "obs-studio-browser"],
+            "com.obsproject.studio": ["obs-studio", "obs-studio-git"],
+            "prismlauncher": ["prismlauncher", "prismlauncher-qt5", "prismlauncher-bin"],
+            "org.prismlauncher.prismlauncher": ["prismlauncher", "prismlauncher-bin"],
+            "bottles": ["bottles", "bottles-bin"],
+            "com.usebottles.bottles": ["bottles", "bottles-bin"],
+            "handbrake": ["handbrake", "handbrake-cli"],
+            "fr.handbrake.ghb": ["handbrake"],
+            "keepassxc": ["keepassxc"],
+            "org.keepassxc.keepassxc": ["keepassxc"],
+            "thunderbird": ["thunderbird", "thunderbird-bin"],
+            "org.mozilla.thunderbird": ["thunderbird", "thunderbird-bin"],
+            "libreoffice": ["libreoffice-fresh", "libreoffice-still"],
+            "libreoffice-startcenter": ["libreoffice-fresh", "libreoffice-still"],
+            "libreoffice-main": ["libreoffice-fresh", "libreoffice-still"],
+            "evince": ["evince"],
+            "org.gnome.evince": ["evince"],
+            "baobab": ["baobab"],
+            "org.gnome.baobab": ["baobab"],
+            "nautilus": ["nautilus"],
+            "org.gnome.nautilus": ["nautilus"],
+            "dolphin": ["dolphin"],
+            "org.kde.dolphin": ["dolphin"],
+            "thunar": ["thunar"],
+            "org.xfce.thunar": ["thunar"],
+            "pavucontrol": ["pavucontrol"],
+            "org.pulseaudio.pavucontrol": ["pavucontrol"],
+            "lutris": ["lutris", "lutris-git"],
+            "net.lutris.lutris": ["lutris", "lutris-git"],
+            "zen": ["zen-browser-bin", "zen-browser"],
+            "zen-browser": ["zen-browser-bin", "zen-browser"],
+            "rofi": ["rofi-wayland", "rofi"],
+            "rofi-wayland": ["rofi-wayland", "rofi"],
+            "wireshark": ["wireshark-qt", "wireshark-cli"],
+            "onlyoffice": ["onlyoffice-bin", "onlyoffice-desktopeditors"],
+            "onlyoffice-desktopeditors": ["onlyoffice-bin", "onlyoffice-desktopeditors"],
+            "anytype": ["anytype-bin", "anytype"],
+            "joplin": ["joplin-desktop", "joplin-appimage", "joplin"],
+            "mullvad-vpn": ["mullvad-vpn-bin", "mullvad-vpn"],
+            "proton-vpn": ["proton-vpn-gtk-app", "protonvpn"],
+            "protonvpn-app": ["proton-vpn-gtk-app", "protonvpn"],
+            "ryujinx": ["ryujinx-bin", "ryujinx"],
+            "stacer": ["stacer-bin", "stacer"],
+            "hardinfo": ["hardinfo-git", "hardinfo2", "hardinfo"],
         }
         if n_low in aliases:
             for cand in aliases[n_low]:
                 if cand in self.installed_set:
                     return cand
 
-        # Check provides in installed packages
-        for inst_pkg in self.installed_set:
-            pkg_data = self.packages.get(inst_pkg)
-            if pkg_data:
-                provides = pkg_data.get("provides", [])
-                if any(p.split("=")[0].split(">")[0].split("<")[0].strip().lower() == n_low for p in provides):
-                    return inst_pkg
-
-        clean = re.sub(r'-(bin|git|hg|svn|pure|gtk-app|qt-app|gui|cli|daemon|desktop|launcher)$', '', n_low)
+        # 5. Strip suffixes and re-check
+        clean = re.sub(r'-(bin|git|hg|svn|pure|gtk-app|qt-app|gui|cli|daemon|desktop|launcher|fresh|still|wayland|x11|browser)$', '', n_low)
         if clean in self.installed_set:
             return clean
-        if f"{clean}-bin" in self.installed_set:
-            return f"{clean}-bin"
+        for suf in ("-bin", "-desktop", "-desktop-bin", "-git", "-gtk-app", "-qt-app", "-fresh", "-still", "-wayland"):
+            if f"{clean}{suf}" in self.installed_set:
+                return f"{clean}{suf}"
+        if clean in aliases:
+            for cand in aliases[clean]:
+                if cand in self.installed_set:
+                    return cand
 
+        # 6. O(1) lookup in pre-built _provides_map ( fallback to scan only if _provides_map is empty )
+        prov_map = getattr(self, "_provides_map", None)
+        if prov_map:
+            if n_low in prov_map and prov_map[n_low] in self.installed_set:
+                res = prov_map[n_low]
+                if cache is not None:
+                    cache[raw_low] = res
+                return res
+            if clean in prov_map and prov_map[clean] in self.installed_set:
+                res = prov_map[clean]
+                if cache is not None:
+                    cache[raw_low] = res
+                return res
+        else:
+            for inst_pkg in self.installed_set:
+                pkg_data = self.packages.get(inst_pkg)
+                if pkg_data:
+                    provides = pkg_data.get("provides", [])
+                    if any(p.split("=")[0].split(">")[0].split("<")[0].strip().lower() in (n_low, clean) for p in provides):
+                        if cache is not None:
+                            cache[raw_low] = inst_pkg
+                        return inst_pkg
+
+        if cache is not None:
+            cache[raw_low] = n_low
         return n_low
 
     def is_installed(self, pkg_name: str) -> bool:
@@ -2380,48 +2849,61 @@ class PackageManager:
 
     def is_pkg_installing(self, pkg_name: str) -> bool:
         """
-        Returns True if self.active_transaction exists and matches pkg_name for installation
-        or active single update (preserving backward compatibility with tests).
+        Returns True if pkg_name is actively installing/updating across ANY engine
+        (Pacman, AUR, Snap, Docker, or .deb).
         """
         if not pkg_name:
             return False
         target = pkg_name.strip().lower()
         resolved = self.resolve_installed_pkg_name(target).lower()
+
+        if hasattr(self, "container_mgr") and self.container_mgr:
+            if target in getattr(self.container_mgr, "active_container_installs", set()):
+                return True
+        if hasattr(self, "snap_mgr") and self.snap_mgr:
+            if target in getattr(self.snap_mgr, "active_snap_ops", {}):
+                return True
+        if hasattr(self, "deb_mgr") and self.deb_mgr:
+            if target in getattr(self.deb_mgr, "active_deb_installs", {}):
+                return True
+
         with self._action_lock:
-            if not self.active_transaction:
-                return False
-            if self.active_transaction.get("is_completed"):
-                return False
-            tx_pkg = (self.active_transaction.get("pkg_name") or "").strip().lower()
-            if tx_pkg in (target, resolved):
-                return True
-            cur_pkg = (self.active_transaction.get("current_pkg") or "").strip().lower()
-            if cur_pkg in (target, resolved):
-                return True
-            pkgs = self.active_transaction.get("packages")
-            if isinstance(pkgs, (list, set, tuple)):
-                if any(isinstance(p, str) and p.strip().lower() in (target, resolved) for p in pkgs):
+            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None)):
+                if not tx or tx.get("is_completed"):
+                    continue
+                tx_pkg = (tx.get("pkg_name") or "").strip().lower()
+                if tx_pkg in (target, resolved):
                     return True
-            action = (self.active_transaction.get("action") or "").lower()
-            if action in ["update", "upgrade"]:
-                if tx_pkg in ["system", "--all", "all", "", None]:
-                    if target in ["system", "--all", "all", ""]:
+                cur_pkg = (tx.get("current_pkg") or "").strip().lower()
+                if cur_pkg in (target, resolved):
+                    return True
+                pkgs = tx.get("packages")
+                if isinstance(pkgs, (list, set, tuple)):
+                    if any(isinstance(p, str) and p.strip().lower() in (target, resolved) for p in pkgs):
                         return True
-                    # Only return True if it's the currently active package in system upgrade
-                    if cur_pkg and cur_pkg in (target, resolved):
-                        return True
+                action = (tx.get("action") or "").lower()
+                if action in ["update", "upgrade"]:
+                    if tx_pkg in ["system", "--all", "all", "", None]:
+                        if target in ["system", "--all", "all", ""]:
+                            return True
+                        if cur_pkg and cur_pkg in (target, resolved):
+                            return True
             return False
 
     def is_pkg_queued(self, pkg_name: str) -> bool:
-        """Returns True if pkg_name is queued waiting for pacman/system transaction or part of batch update."""
+        """Returns True if pkg_name is queued waiting for transaction or part of batch update."""
         if not pkg_name:
             return False
         target = pkg_name.strip().lower()
         resolved = self.resolve_installed_pkg_name(target).lower()
         with self._action_lock:
-            if any((item.get("pkg_name") or "").strip().lower() in (target, resolved) for item in self._pending_actions):
+            all_queues = (
+                self._pending_actions
+                + getattr(self, "_pending_snap_actions", [])
+                + getattr(self, "_pending_docker_actions", [])
+            )
+            if any((item.get("pkg_name") or "").strip().lower() in (target, resolved) for item in all_queues):
                 return True
-            # Batch update pending check
             if self.active_transaction and not self.active_transaction.get("is_completed"):
                 action = (self.active_transaction.get("action") or "").lower()
                 if action in ["update", "upgrade"]:
@@ -2437,14 +2919,23 @@ class PackageManager:
         return False
 
     def get_queued_pkgs(self) -> List[str]:
-        """Returns list of package names currently waiting in the transaction queue."""
+        """Returns list of package names currently waiting in all transaction queues."""
         with self._action_lock:
-            return [(item.get("pkg_name") or "").strip().lower() for item in self._pending_actions if item.get("pkg_name")]
+            all_queues = (
+                self._pending_actions
+                + getattr(self, "_pending_snap_actions", [])
+                + getattr(self, "_pending_docker_actions", [])
+            )
+            return [(item.get("pkg_name") or "").strip().lower() for item in all_queues if item.get("pkg_name")]
 
     def get_queue_length(self) -> int:
         """Returns count of actions currently queued."""
         with self._action_lock:
-            return len(self._pending_actions)
+            return (
+                len(self._pending_actions)
+                + len(getattr(self, "_pending_snap_actions", []))
+                + len(getattr(self, "_pending_docker_actions", []))
+            )
 
     def get_queue_position(self, pkg_name: str) -> int:
         """Returns 1-based position in queue if queued, or 0 if not queued."""
@@ -2452,9 +2943,10 @@ class PackageManager:
             return 0
         target = pkg_name.strip().lower()
         with self._action_lock:
-            for idx, item in enumerate(self._pending_actions, start=1):
-                if (item.get("pkg_name") or "").strip().lower() == target:
-                    return idx
+            for q in (self._pending_actions, getattr(self, "_pending_snap_actions", []), getattr(self, "_pending_docker_actions", [])):
+                for idx, item in enumerate(q, start=1):
+                    if (item.get("pkg_name") or "").strip().lower() == target:
+                        return idx
         return 0
 
     def cancel_queued_pkg(self, pkg_name: str) -> bool:
@@ -2463,63 +2955,87 @@ class PackageManager:
             return False
         target = pkg_name.strip().lower()
         with self._action_lock:
-            for idx, item in enumerate(self._pending_actions):
-                if (item.get("pkg_name") or "").strip().lower() == target:
-                    self._pending_actions.pop(idx)
-                    return True
+            for q in (self._pending_actions, getattr(self, "_pending_snap_actions", []), getattr(self, "_pending_docker_actions", [])):
+                for idx, item in enumerate(q):
+                    if (item.get("pkg_name") or "").strip().lower() == target:
+                        q.pop(idx)
+                        return True
         return False
 
     def is_busy(self) -> bool:
-        """Returns True if a transaction is currently active or actions are queued."""
+        """Returns True if any transaction is currently active or actions are queued."""
         with self._action_lock:
-            return self.active_transaction is not None or len(self._pending_actions) > 0
+            return (
+                self.active_transaction is not None
+                or getattr(self, "_active_snap_tx", None) is not None
+                or getattr(self, "_active_docker_tx", None) is not None
+                or len(self._pending_actions) > 0
+                or len(getattr(self, "_pending_snap_actions", [])) > 0
+                or len(getattr(self, "_pending_docker_actions", [])) > 0
+            )
 
     def has_active_tasks(self) -> bool:
         """Returns True if any background transaction, queued action, or service setup is running."""
         if self.is_busy():
             return True
-        if getattr(self.snap_mgr, "is_setting_up", False):
+        if getattr(self.snap_mgr, "is_setting_up", False) or bool(getattr(self.snap_mgr, "active_snap_ops", None)):
             return True
-        if getattr(self.container_mgr, "is_configuring", False):
+        if getattr(self.container_mgr, "is_configuring", False) or bool(getattr(self.container_mgr, "active_container_installs", None)):
+            return True
+        if hasattr(self, "deb_mgr") and bool(getattr(self.deb_mgr, "active_deb_installs", None)):
             return True
         return False
 
     def get_active_progress(self, pkg_name: Optional[str] = None) -> Tuple[float, str]:
         """
-        Returns (progress_fraction, status_msg) for the active transaction,
-        or (0.0, "") if none.
+        Returns (progress_fraction, status_msg) for the active transaction matching pkg_name
+        across ALPM, Snap, Docker, and .deb engines, or (0.0, "") if none.
         """
+        if pkg_name is not None:
+            target = pkg_name.strip().lower()
+            if hasattr(self, "snap_mgr") and target in getattr(self.snap_mgr, "active_snap_ops", {}):
+                return self.snap_mgr.active_snap_ops[target]
+            if hasattr(self, "container_mgr") and target in getattr(self.container_mgr, "active_container_progress", {}):
+                return self.container_mgr.active_container_progress[target]
+            if hasattr(self, "deb_mgr") and target in getattr(self.deb_mgr, "active_deb_installs", {}):
+                return self.deb_mgr.active_deb_installs[target]
+
         with self._action_lock:
-            if not self.active_transaction:
-                return (0.0, "")
-            if pkg_name is not None:
-                target = pkg_name.strip().lower()
-                tx_pkg = (self.active_transaction.get("pkg_name") or "").strip().lower()
-                matches = (tx_pkg == target)
-                if not matches:
-                    cur_pkg = (self.active_transaction.get("current_pkg") or "").strip().lower()
-                    matches = (cur_pkg == target)
-                if not matches:
-                    pkgs = self.active_transaction.get("packages")
-                    if isinstance(pkgs, (list, set, tuple)):
-                        matches = any(isinstance(p, str) and p.strip().lower() == target for p in pkgs)
+            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None)):
+                if not tx:
+                    continue
+                if pkg_name is not None:
+                    target = pkg_name.strip().lower()
+                    tx_pkg = (tx.get("pkg_name") or "").strip().lower()
+                    matches = (tx_pkg == target)
                     if not matches:
-                        action = (self.active_transaction.get("action") or "").lower()
-                        if action in ["update", "upgrade"]:
-                            if tx_pkg in ["system", "--all", "all", "", None]:
-                                if target in ["system", "--all", "all", ""]:
-                                    matches = True
-                                else:
-                                    with self._lock:
-                                        matches = any(u.get("name", "").strip().lower() == target for u in self.upgradable_list)
-                if not matches:
-                    return (0.0, "")
-            prog = float(self.active_transaction.get("progress", self._last_progress))
-            msg = str(self.active_transaction.get("status_msg") or self.active_transaction.get("status") or "")
-            return (prog, msg)
+                        cur_pkg = (tx.get("current_pkg") or "").strip().lower()
+                        matches = (cur_pkg == target)
+                    if not matches:
+                        pkgs = tx.get("packages")
+                        if isinstance(pkgs, (list, set, tuple)):
+                            matches = any(isinstance(p, str) and p.strip().lower() == target for p in pkgs)
+                        if not matches:
+                            action = (tx.get("action") or "").lower()
+                            if action in ["update", "upgrade"]:
+                                if tx_pkg in ["system", "--all", "all", "", None]:
+                                    if target in ["system", "--all", "all", ""]:
+                                        matches = True
+                                    else:
+                                        with self._lock:
+                                            matches = any(u.get("name", "").strip().lower() == target for u in self.upgradable_list)
+                    if not matches:
+                        continue
+                prog = float(tx.get("progress", self._last_progress))
+                msg = str(tx.get("status_msg") or tx.get("status") or "")
+                return (prog, msg)
+            return (0.0, "")
 
     def get_installed_desktop_apps(self) -> List[Dict[str, Any]]:
-        """Return list of real installed desktop applications with .desktop launchers."""
+        """Return list of real installed desktop applications with .desktop launchers (O(1) cached)."""
+        cached = getattr(self, "_installed_desktop_apps_cache", None)
+        if cached is not None:
+            return list(cached)
         apps = []
         seen = set()
         search_dirs = [
@@ -2537,7 +3053,7 @@ class PackageManager:
                 continue
             for p in sorted(d.glob("*.desktop")):
                 stem = p.stem.lower()
-                if stem in ignored_stems:
+                if stem in ignored_stems or stem.endswith("-url-handler") or stem.endswith("-uri-handler"):
                     continue
                 name, icon, comment, exec_cmd = "", "", "", ""
                 no_display = False
@@ -2573,30 +3089,79 @@ class PackageManager:
                     continue
                 seen.add(clean_key)
 
-                pkg_name = stem
-                if stem.startswith("org.gnome."):
-                    clean_id = stem.replace("org.gnome.", "")
-                elif "." in stem:
-                    clean_id = stem.split(".")[-1]
-                else:
-                    clean_id = stem
+                # 1. Detect Docker sandbox shortcuts created by Aura
+                if stem.startswith("aura-box-"):
+                    docker_app_id = p.stem[len("aura-box-"):]
+                    apps.append({
+                        "name": docker_app_id,
+                        "display_name": name,
+                        "desc": comment or f"{name} (Docker Sandbox)",
+                        "icon": icon,
+                        "desktop_entry": p.stem,
+                        "source": "docker",
+                        "is_installed": True,
+                    })
+                    continue
 
-                if clean_id in self.installed_set:
-                    pkg_name = clean_id
-                elif stem in self.installed_set:
-                    pkg_name = stem
+                # 2. Resolve exact owning package via _desktop_owner_map, _binary_owner_map, or resolve_installed_pkg_name
+                pkg_name = ""
+                if hasattr(self, "_desktop_owner_map") and stem in self._desktop_owner_map:
+                    pkg_name = self._desktop_owner_map[stem]
+                if not pkg_name and exec_cmd:
+                    clean_exec = exec_cmd.split()[0].strip('"').strip("'")
+                    bin_base = os.path.basename(clean_exec).lower()
+                    if hasattr(self, "_binary_owner_map") and bin_base in self._binary_owner_map:
+                        pkg_name = self._binary_owner_map[bin_base]
+                    elif bin_base in self.installed_set:
+                        pkg_name = bin_base
 
+                if not pkg_name:
+                    resolved_stem = self.resolve_installed_pkg_name(stem)
+                    if resolved_stem in self.installed_set:
+                        pkg_name = resolved_stem
+                    else:
+                        if stem.startswith("org.gnome."):
+                            clean_id = stem.replace("org.gnome.", "")
+                        elif "." in stem:
+                            parts_dot = [ seg for seg in stem.split(".") if seg not in ("org", "com", "io", "net", "fr", "de", "app", "desktop", "studio", "github", "gitlab") ]
+                            clean_id = parts_dot[-1] if parts_dot else stem.split(".")[-1]
+                        else:
+                            clean_id = stem
+                        resolved_clean = self.resolve_installed_pkg_name(clean_id)
+                        if resolved_clean in self.installed_set:
+                            pkg_name = resolved_clean
+                        else:
+                            pkg_name = clean_id if clean_id in self.installed_set else stem
+
+                # 3. Determine accurate source (deb, aur, snap, pacman)
+                app_source = "pacman"
+                if hasattr(self, "deb_mgr") and self.deb_mgr and self.deb_mgr.is_deb_installed(pkg_name):
+                    app_source = "deb"
+                elif pkg_name in self.packages:
+                    p_meta = self.packages[pkg_name]
+                    if p_meta.get("source") == "deb" or p_meta.get("repo") == "deb-local":
+                        app_source = "deb"
+                    elif p_meta.get("repo") == "local":
+                        app_source = "aur"
+                elif pkg_name not in self.installed_set and hasattr(self, "snap_mgr") and self.snap_mgr.is_snap_installed(pkg_name):
+                    app_source = "snap"
+
+                pkg_dedup_key = f"pkg:{pkg_name.lower()}"
+                if pkg_dedup_key in seen and pkg_name.lower() not in ("libreoffice-fresh", "libreoffice-still"):
+                    continue
+                seen.add(pkg_dedup_key)
                 apps.append({
                     "name": pkg_name,
                     "display_name": name,
-                    "desc": comment or f"{name} desktop application",
+                    "desc": comment or (self.packages.get(pkg_name, {}).get("desc") or f"{name} desktop application"),
                     "icon": icon,
                     "desktop_entry": p.stem,
-                    "source": "pacman",
+                    "source": app_source,
                     "is_installed": True,
                 })
 
         apps.sort(key=lambda x: x["display_name"].lower())
+        self._installed_desktop_apps_cache = list(apps)
         return apps
 
     def _format_featured_app(self, app_id: str, cat_id: str = "", app_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2766,8 +3331,11 @@ class PackageManager:
 
         self.is_checking_updates = True
         updates: List[Dict[str, str]] = []
+        pacman_checked = False
         try:
             res = subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=14)
+            if res.returncode in (0, 2):
+                pacman_checked = True
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
                     parts = line.strip().split()
@@ -2783,11 +3351,33 @@ class PackageManager:
         except Exception as e:
             print(f"[Aura] Update check: {e}", file=sys.stderr)
 
-        # Merge AUR updates if helper available
+        # Fallback to pacman -Qu if checkupdates failed or is unavailable
+        if not pacman_checked:
+            try:
+                res_qu = subprocess.run(["pacman", "-Qu"], capture_output=True, text=True, timeout=8)
+                if res_qu.returncode == 0:
+                    for line in res_qu.stdout.splitlines():
+                        parts = line.strip().split()
+                        if len(parts) >= 4 and parts[2] == "->":
+                            pkg_name = parts[0]
+                            updates.append({
+                                "name": pkg_name,
+                                "old_ver": parts[1],
+                                "new_ver": parts[3],
+                                "source": "pacman",
+                                "icon": resolve_icon_name(pkg_name)
+                            })
+            except Exception:
+                pass
+
+        # Merge AUR updates via helper or direct AUR RPC v5 fallback
         aur_helper = get_aur_helper()
+        aur_checked = False
         if aur_helper:
             try:
-                aur_res = subprocess.run([aur_helper, "-Qua"], capture_output=True, text=True, timeout=8)
+                aur_res = subprocess.run([aur_helper, "-Qua"], capture_output=True, text=True, timeout=12)
+                if aur_res.returncode in (0, 1):
+                    aur_checked = True
                 if aur_res.returncode == 0:
                     for line in aur_res.stdout.splitlines():
                         parts = line.strip().split()
@@ -2802,6 +3392,46 @@ class PackageManager:
                             })
             except Exception as e:
                 print(f"[Aura] AUR update check: {e}", file=sys.stderr)
+
+        if not aur_checked:
+            try:
+                qm_res = subprocess.run(["pacman", "-Qm"], capture_output=True, text=True, timeout=5)
+                if qm_res.returncode == 0 and qm_res.stdout.strip():
+                    foreign_pkgs = {}
+                    for line in qm_res.stdout.splitlines():
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            foreign_pkgs[parts[0]] = parts[1]
+                    if foreign_pkgs:
+                        args_q = "&".join(f"arg[]={urllib.parse.quote(k)}" for k in list(foreign_pkgs.keys())[:100])
+                        rpc_url = f"https://aur.archlinux.org/rpc/v5/info?{args_q}"
+                        req = urllib.request.Request(rpc_url, headers={"User-Agent": "Aura-PackageHub/3.0"})
+                        with urllib.request.urlopen(req, timeout=5) as resp:
+                            rpc_data = json.loads(resp.read().decode("utf-8"))
+                            for item in rpc_data.get("results", []):
+                                p_name = item.get("Name", "")
+                                new_v = item.get("Version", "")
+                                old_v = foreign_pkgs.get(p_name, "")
+                                if p_name and new_v and old_v and new_v != old_v:
+                                    # Verify with vercmp if available
+                                    is_newer = True
+                                    if shutil.which("vercmp"):
+                                        vc = subprocess.run(["vercmp", new_v, old_v], capture_output=True, text=True, timeout=2)
+                                        if vc.returncode == 0:
+                                            try:
+                                                is_newer = int(vc.stdout.strip()) > 0
+                                            except ValueError:
+                                                pass
+                                    if is_newer:
+                                        updates.append({
+                                            "name": p_name,
+                                            "old_ver": old_v,
+                                            "new_ver": new_v,
+                                            "source": "aur",
+                                            "icon": resolve_icon_name(p_name)
+                                        })
+            except Exception:
+                pass
 
         # Merge Snap updates
         try:
@@ -2858,72 +3488,134 @@ class PackageManager:
         return latest
 
     def load_pacman_db(self, force_reload: bool = False):
-        """Load or parse pacman sync databases into memory."""
-        self.refresh_installed()
-        sync_mtime = self._get_sync_mtime()
+        """Load or parse pacman sync databases into memory (thread-safe & zstd-accelerated)."""
+        db_lock = getattr(self, "_db_load_lock", None)
+        if db_lock is None:
+            self._db_load_lock = threading.Lock()
+            db_lock = self._db_load_lock
 
-        if not force_reload and CACHE_FILE.exists():
-            try:
-                cache_stat = CACHE_FILE.stat()
-                if cache_stat.st_mtime >= sync_mtime:
-                    with open(CACHE_FILE, "rb") as f:
-                        cached_pkgs = pickle.load(f)
-                    with self._lock:
-                        self.packages = cached_pkgs
-                        self.is_loaded = True
-                    return
-            except Exception as e:
-                print(f"[Aura] Cache read error, rebuilding: {e}", file=sys.stderr)
+        with db_lock:
+            if not force_reload and self.is_loaded and self.packages:
+                return
+            self.refresh_installed()
+            sync_mtime = self._get_sync_mtime()
 
-        pkgs: Dict[str, Dict[str, Any]] = {}
-        for db_file in sorted(glob.glob("/var/lib/pacman/sync/*.db")):
-            repo = os.path.basename(db_file).replace(".db", "")
-            try:
-                with tarfile.open(db_file, "r:*") as tar:
-                    for m in tar.getmembers():
-                        if m.name.endswith("/desc"):
-                            f = tar.extractfile(m)
-                            if not f:
-                                continue
-                            content = f.read().decode("utf-8", errors="replace").split("\n\n")
-                            item: Dict[str, Any] = {
-                                "repo": repo,
-                                "source": "pacman",
-                                "depends": [],
-                                "optdepends": [],
-                                "provides": [],
-                                "conflicts": []
-                            }
-                            for section in content:
-                                lines = section.strip().split("\n")
-                                if not lines or not lines[0].startswith("%") or not lines[0].endswith("%"):
+            if not force_reload and CACHE_FILE.exists():
+                try:
+                    cache_stat = CACHE_FILE.stat()
+                    if cache_stat.st_mtime >= sync_mtime:
+                        with open(CACHE_FILE, "rb") as f:
+                            cached_pkgs = pickle.load(f)
+                        if cached_pkgs:
+                            with self._lock:
+                                self.packages = cached_pkgs
+                                self.is_loaded = True
+                            return
+                except Exception as e:
+                    print(f"[Aura] Cache read error, rebuilding: {e}", file=sys.stderr)
+
+            def _parse_desc_text(raw_desc: str, repo_name: str, src_type: str = "pacman") -> Optional[Dict[str, Any]]:
+                content = raw_desc.split("\n\n")
+                item: Dict[str, Any] = {
+                    "repo": repo_name,
+                    "source": src_type,
+                    "depends": [],
+                    "optdepends": [],
+                    "provides": [],
+                    "conflicts": []
+                }
+                for section in content:
+                    lines = section.strip().split("\n")
+                    if not lines or not lines[0].startswith("%") or not lines[0].endswith("%"):
+                        continue
+                    key = lines[0][1:-1].lower()
+                    if key in ["depends", "optdepends", "provides", "conflicts"]:
+                        item[key] = lines[1:]
+                    elif key == "size" and "isize" not in item:
+                        item["isize"] = lines[1] if len(lines) > 1 else ""
+                    else:
+                        item[key] = lines[1] if len(lines) > 1 else ""
+                if "name" in item and isinstance(item["name"], str):
+                    return item
+                return None
+
+            pkgs: Dict[str, Dict[str, Any]] = {}
+            for db_file in sorted(glob.glob("/var/lib/pacman/sync/*.db")):
+                repo = os.path.basename(db_file).replace(".db", "")
+                parsed_this_db = False
+                try:
+                    with tarfile.open(db_file, "r:*") as tar:
+                        for m in tar.getmembers():
+                            if m.name.endswith("/desc"):
+                                f = tar.extractfile(m)
+                                if not f:
                                     continue
-                                key = lines[0][1:-1].lower()
-                                if key in ["depends", "optdepends", "provides", "conflicts"]:
-                                    item[key] = lines[1:]
-                                else:
-                                    item[key] = lines[1] if len(lines) > 1 else ""
+                                raw_txt = f.read().decode("utf-8", errors="replace")
+                                item = _parse_desc_text(raw_txt, repo, "pacman")
+                                if item:
+                                    pkgs[item["name"]] = item
+                    parsed_this_db = True
+                except Exception as e:
+                    # Fallback for zstd-compressed pacman sync databases (.db compressed with zstd)
+                    if shutil.which("zstd"):
+                        try:
+                            zproc = subprocess.run(["zstd", "-dc", db_file], capture_output=True, timeout=15)
+                            if zproc.returncode == 0 and zproc.stdout:
+                                with tarfile.open(fileobj=io.BytesIO(zproc.stdout), mode="r:") as tar:
+                                    for m in tar.getmembers():
+                                        if m.name.endswith("/desc"):
+                                            f = tar.extractfile(m)
+                                            if not f:
+                                                continue
+                                            raw_txt = f.read().decode("utf-8", errors="replace")
+                                            item = _parse_desc_text(raw_txt, repo, "pacman")
+                                            if item:
+                                                pkgs[item["name"]] = item
+                                parsed_this_db = True
+                        except Exception:
+                            pass
+                    if not parsed_this_db:
+                        print(f"[Aura] Error parsing {db_file}: {e}", file=sys.stderr)
 
-                            if "name" in item and isinstance(item["name"], str):
+            # Also index locally installed packages (/var/lib/pacman/local/*/desc) so AUR and .deb packages have rich metadata
+            local_db_dir = Path("/var/lib/pacman/local")
+            if local_db_dir.exists():
+                try:
+                    for desc_path in local_db_dir.glob("*/desc"):
+                        try:
+                            raw_txt = desc_path.read_text(encoding="utf-8", errors="replace")
+                            item = _parse_desc_text(raw_txt, "local", "pacman")
+                            if item and item["name"] not in pkgs:
+                                packager = str(item.get("packager", ""))
+                                if "Aura Deb Bridge" in packager:
+                                    item["source"] = "deb"
+                                    item["repo"] = "deb-local"
                                 pkgs[item["name"]] = item
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            with self._lock:
+                self.packages = pkgs
+                self.is_loaded = True
+
+            try:
+                with open(CACHE_FILE, "wb") as f:
+                    pickle.dump(pkgs, f)
             except Exception as e:
-                print(f"[Aura] Error parsing {db_file}: {e}", file=sys.stderr)
-
-        with self._lock:
-            self.packages = pkgs
-            self.is_loaded = True
-
-        try:
-            with open(CACHE_FILE, "wb") as f:
-                pickle.dump(pkgs, f)
-        except Exception as e:
-            print(f"[Aura] Error saving cache: {e}", file=sys.stderr)
+                print(f"[Aura] Error saving cache: {e}", file=sys.stderr)
 
     def search_pacman(self, query: str, limit: int = 150) -> List[Dict[str, Any]]:
         """High-performance tiered fuzzy search for pacman repository packages."""
         clean_q = query.strip().lower()
         if not clean_q:
             return []
+        if not self.is_loaded and not self.packages:
+            try:
+                self.load_pacman_db()
+            except Exception:
+                pass
 
         q_len = len(clean_q)
         q_norm = re.sub(r'[-_.\s]+', ' ', clean_q).strip()
@@ -3215,9 +3907,17 @@ class PackageManager:
         Intelligently determine whether a package is from official pacman repos,
         AUR, Snap, or Docker/Container.
         """
-        clean = (pkg_name or "").strip().lower()
+        raw_pkg = (pkg_name or "").strip()
+        if raw_pkg.lower().endswith(".deb") or "/" in raw_pkg:
+            if raw_pkg.lower().endswith(".deb"):
+                return "deb"
+        clean = raw_pkg.lower()
         if not clean:
             return "pacman"
+
+        # 0. Check if package is an installed .deb package
+        if hasattr(self, "deb_mgr") and self.deb_mgr and self.deb_mgr.is_deb_installed(clean):
+            return "deb"
 
         # 1. Check official pacman sync DB & installed packages
         if clean in self.packages or clean in self.installed_set:
@@ -3266,6 +3966,9 @@ class PackageManager:
 
     def get_package_detail(self, name: str, source: str = "pacman") -> Dict[str, Any]:
         """Fetch full details of a package with strict sanitization."""
+        if source == "deb" or str(name).lower().endswith(".deb"):
+            if hasattr(self, "deb_mgr") and self.deb_mgr:
+                return self.deb_mgr.get_deb_detail(name)
         if source == "snap":
             return self.snap_mgr.get_snap_details(name)
         elif source in ("container", "docker"):
@@ -3452,6 +4155,7 @@ class PackageManager:
             "completed_pkgs": [],
             "current_idx": 0,
             "total_packages": 1,
+            "log_lines": [],
         }
         if action in ["upgrade", "update"] and is_system_upgrade:
             with self._lock:
@@ -3510,16 +4214,64 @@ class PackageManager:
         - When an action completes, automatically pops and executes the next queued action.
         """
         target_norm = (pkg_name or "").strip().lower()
+        eff_act_check = "remove" if action == "clean_remove" else action
+        is_sys_up = target_norm in ("system", "--all", "all", "") and eff_act_check in ("update", "upgrade")
 
+        # Security Gate 1: Validate package identifier against injection / malformed names
+        if not is_sys_up and not (source == "deb" and target_norm.endswith(".deb")):
+            if not is_valid_pkg_name(target_norm):
+                progress_cb(0.0, f"Invalid package name: '{pkg_name}'")
+                complete_cb(False, action, str(pkg_name), f"Invalid or unsafe package identifier: '{pkg_name}'")
+                return "rejected"
+
+        # Security Gate 2: Block removal of critical base system packages
+        if eff_act_check == "remove":
+            resolved_check = self.resolve_installed_pkg_name(target_norm)
+            if target_norm in CRITICAL_SYSTEM_PACKAGES or resolved_check in CRITICAL_SYSTEM_PACKAGES:
+                err_msg = f"Refusing to remove critical core system package '{resolved_check or target_norm}'."
+                progress_cb(0.0, err_msg)
+                complete_cb(False, action, str(pkg_name), err_msg)
+                return "rejected"
+
+        src_norm = (source or "pacman").strip().lower()
         with self._action_lock:
-            # Check if identical action is already running or queued
+            if self.is_pkg_installing(target_norm) and target_norm not in ("system", "--all", "all", ""):
+                return "already_active"
+            if self.is_pkg_queued(target_norm) and target_norm not in ("system", "--all", "all", ""):
+                return "already_queued"
+
             if self.active_transaction is not None:
-                tx_pkg = (self.active_transaction.get("pkg_name") or "").strip().lower()
-                if target_norm and tx_pkg == target_norm:
-                    return "already_active"
-                for item in self._pending_actions:
-                    if (item.get("pkg_name") or "").strip().lower() == target_norm and item.get("action") == action:
-                        return "already_queued"
+                active_src = (self.active_transaction.get("source") or "pacman").strip().lower()
+                if src_norm == "snap" and active_src != "snap" and getattr(self, "_active_snap_tx", None) is None:
+                    self._active_snap_tx = {
+                        "action": action,
+                        "pkg_name": pkg_name,
+                        "source": "snap",
+                        "progress": 0.06,
+                        "status": f"Preparing Snap {pkg_name}...",
+                        "status_msg": f"Preparing Snap {pkg_name}...",
+                        "start_time": time.time(),
+                        "current_pkg": target_norm,
+                        "packages": [pkg_name],
+                        "log_lines": [],
+                    }
+                    self._start_action_worker(action, pkg_name, source, progress_cb, complete_cb, start_cb)
+                    return "started"
+                if src_norm == "docker" and active_src != "docker" and getattr(self, "_active_docker_tx", None) is None:
+                    self._active_docker_tx = {
+                        "action": action,
+                        "pkg_name": pkg_name,
+                        "source": "docker",
+                        "progress": 0.06,
+                        "status": f"Preparing Docker app {pkg_name}...",
+                        "status_msg": f"Preparing Docker app {pkg_name}...",
+                        "start_time": time.time(),
+                        "current_pkg": target_norm,
+                        "packages": [pkg_name],
+                        "log_lines": [],
+                    }
+                    self._start_action_worker(action, pkg_name, source, progress_cb, complete_cb, start_cb)
+                    return "started"
 
                 self._pending_actions.append({
                     "action": action,
@@ -3530,14 +4282,10 @@ class PackageManager:
                     "start_cb": start_cb,
                     "enqueued_time": time.time(),
                 })
-                q_pos = len(self._pending_actions)
-                progress_cb(0.02, f"Queued in transaction line (#{q_pos})...")
                 return "queued"
 
-            # Idle: initialize active_transaction immediately under lock
             self._init_active_transaction(action, pkg_name, source)
 
-        # Start the action worker
         self._start_action_worker(action, pkg_name, source, progress_cb, complete_cb, start_cb)
         return "started"
 
@@ -3617,6 +4365,13 @@ class PackageManager:
                         else:
                             msg = str(frac_or_msg)
                             frac = 0.5
+                        if msg:
+                            with self._action_lock:
+                                if isinstance(self.active_transaction, dict):
+                                    logs_ref = self.active_transaction.setdefault("log_lines", [])
+                                    logs_ref.append(msg)
+                                    if len(logs_ref) > 250:
+                                        del logs_ref[:-200]
                         _safe_progress(frac, msg)
 
                     def _snap_done(ok: bool, *args):
@@ -3627,6 +4382,11 @@ class PackageManager:
                         else:
                             err = "" if ok else "Snap operation failed"
 
+                        was_parallel_snap = False
+                        with self._action_lock:
+                            if getattr(self, "_active_snap_tx", None) and (self._active_snap_tx.get("pkg_name") or "").strip().lower() == target_pkg:
+                                self._active_snap_tx = None
+                                was_parallel_snap = True
                         if ok:
                             with self._lock:
                                 if action in ["upgrade", "update"]:
@@ -3637,32 +4397,36 @@ class PackageManager:
                                     except Exception:
                                         pass
                             comp_msg = f"Completed {action} for {pkg_name}."
-                            with self._action_lock:
-                                if self.active_transaction:
-                                    self.active_transaction["progress"] = 1.0
-                                    self.active_transaction["status"] = comp_msg
-                                    self.active_transaction["status_msg"] = comp_msg
-                                    self.active_transaction["is_completed"] = True
-                            self._last_progress = 1.0
+                            if not was_parallel_snap:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 1.0
+                                        self.active_transaction["status"] = comp_msg
+                                        self.active_transaction["status_msg"] = comp_msg
+                                        self.active_transaction["is_completed"] = True
+                                self._last_progress = 1.0
                             progress_cb(1.0, comp_msg)
                             try:
                                 complete_cb(True, action, pkg_name, "")
                             finally:
-                                self._process_next_action()
+                                if not was_parallel_snap:
+                                    self._process_next_action()
                         else:
-                            with self._action_lock:
-                                if self.active_transaction:
-                                    self.active_transaction["progress"] = 0.0
-                                    self.active_transaction["status"] = f"Failed: {err}"
-                                    self.active_transaction["status_msg"] = f"Failed: {err}"
-                                    self.active_transaction["is_completed"] = True
-                                self.active_transaction = None
-                                self._last_progress = 0.0
+                            if not was_parallel_snap:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 0.0
+                                        self.active_transaction["status"] = f"Failed: {err}"
+                                        self.active_transaction["status_msg"] = f"Failed: {err}"
+                                        self.active_transaction["is_completed"] = True
+                                    self.active_transaction = None
+                                    self._last_progress = 0.0
                             progress_cb(0.0, f"Failed: {err}")
                             try:
                                 complete_cb(False, action, pkg_name, err)
                             finally:
-                                self._process_next_action()
+                                if not was_parallel_snap:
+                                    self._process_next_action()
 
                     if action == "install":
                         self.snap_mgr.install_snap(pkg_name, progress_cb=_snap_prog, complete_cb=_snap_done)
@@ -3679,6 +4443,11 @@ class PackageManager:
                         _safe_progress(0.5, str(msg))
 
                     def _docker_done(ok: bool, msg: str = ""):
+                        was_parallel_docker = False
+                        with self._action_lock:
+                            if getattr(self, "_active_docker_tx", None) and (self._active_docker_tx.get("pkg_name") or "").strip().lower() == target_pkg:
+                                self._active_docker_tx = None
+                                was_parallel_docker = True
                         if ok:
                             with self._lock:
                                 self.upgradable_list = [u for u in self.upgradable_list if u.get("name") != pkg_name]
@@ -3687,15 +4456,63 @@ class PackageManager:
                                         json.dump(self.upgradable_list, f)
                                 except Exception:
                                     pass
-                            comp_msg = f"Updated container application {pkg_name}."
+                            comp_msg = f"Completed {action} for container application {pkg_name}."
+                            if not was_parallel_docker:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 1.0
+                                        self.active_transaction["status"] = comp_msg
+                                        self.active_transaction["status_msg"] = comp_msg
+                                        self.active_transaction["is_completed"] = True
+                                self._last_progress = 1.0
+                            progress_cb(1.0, comp_msg)
+                            try:
+                                complete_cb(True, action, pkg_name, "")
+                            finally:
+                                if not was_parallel_docker:
+                                    self._process_next_action()
+                        else:
+                            if not was_parallel_docker:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 0.0
+                                        self.active_transaction["status"] = f"Failed: {msg}"
+                                        self.active_transaction["status_msg"] = f"Failed: {msg}"
+                                        self.active_transaction["is_completed"] = True
+                                    self.active_transaction = None
+                                    self._last_progress = 0.0
+                            progress_cb(0.0, f"Failed: {msg}")
+                            try:
+                                complete_cb(False, action, pkg_name, msg)
+                            finally:
+                                if not was_parallel_docker:
+                                    self._process_next_action()
+
+                    if action in ["update", "upgrade"]:
+                        self.container_mgr.update_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
+                    elif action == "install":
+                        self.container_mgr.install_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
+                    elif action == "remove":
+                        self.container_mgr.uninstall_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
+                    else:
+                        _docker_done(False, f"Unsupported docker action: {action}")
+                    return
+
+                if actual_source == "deb" or str(pkg_name).lower().endswith(".deb"):
+                    def _deb_prog(frac: float, msg: str):
+                        _safe_progress(frac, msg)
+
+                    def _deb_done(ok: bool, msg: str):
+                        if ok:
+                            self.refresh_installed()
                             with self._action_lock:
                                 if self.active_transaction:
                                     self.active_transaction["progress"] = 1.0
-                                    self.active_transaction["status"] = comp_msg
-                                    self.active_transaction["status_msg"] = comp_msg
+                                    self.active_transaction["status"] = msg
+                                    self.active_transaction["status_msg"] = msg
                                     self.active_transaction["is_completed"] = True
                             self._last_progress = 1.0
-                            progress_cb(1.0, comp_msg)
+                            progress_cb(1.0, msg)
                             try:
                                 complete_cb(True, action, pkg_name, "")
                             finally:
@@ -3715,53 +4532,137 @@ class PackageManager:
                             finally:
                                 self._process_next_action()
 
-                    if action in ["update", "upgrade"]:
-                        self.container_mgr.update_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
-                    elif action == "install":
-                        self.container_mgr.install_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
+                    if action == "install":
+                        self.deb_mgr.install_deb(pkg_name, progress_cb=_deb_prog, complete_cb=_deb_done, sync_run=True)
                     elif action == "remove":
-                        self.container_mgr.uninstall_app(pkg_name, progress_callback=_docker_prog, completion_callback=_docker_done)
+                        self.deb_mgr.uninstall_deb(pkg_name, progress_cb=_deb_prog, complete_cb=_deb_done, sync_run=True)
                     else:
-                        _docker_done(False, f"Unsupported docker action: {action}")
+                        _deb_done(False, f"Unsupported .deb action: {action}")
                     return
 
                 # Sudo invocation: if passwordless is configured, use 'sudo -n'. Otherwise use 'sudo -A' with askpass.
-                sudo_prefix = ["sudo", "-n"] if PackageManager.is_passwordless_configured() else ["sudo", "-A"]
+                is_pwless = PackageManager.is_passwordless_configured()
+                sudo_prefix = ["sudo", "-n"] if is_pwless else ["sudo", "-A"]
+                aur_sudo_flags = [] if is_pwless else ["--sudoflags", "-A"]
                 aur_helper = get_aur_helper()
 
-                # Pacman / AUR execution
-                if action in ["upgrade", "update"]:
+                # Check and recover from stale /var/lib/pacman/db.lck before launching pacman/AUR transaction
+                if Path("/var/lib/pacman/db.lck").exists():
+                    if hasattr(self, "doctor_mgr") and self.doctor_mgr:
+                        lock_st = self.doctor_mgr.get_pacman_lock_status()
+                        if lock_st.get("is_stale"):
+                            _safe_progress(0.05, "Clearing stale pacman database lock...")
+                            subprocess.run(sudo_prefix + ["rm", "-f", "/var/lib/pacman/db.lck"], capture_output=True, env=env, timeout=10)
+                        elif lock_st.get("locked"):
+                            _safe_progress(0.05, "Waiting for active package manager to release lock...")
+                            for _ in range(12):
+                                time.sleep(1)
+                                if not Path("/var/lib/pacman/db.lck").exists():
+                                    break
+
+                # Native makepkg fallback if action is install/update on an AUR package and no AUR helper is installed
+                if actual_source == "aur" and not aur_helper and action in ("install", "update", "upgrade") and not is_system_upgrade:
+                    _safe_progress(0.08, f"Building {pkg_name} from AUR via makepkg...")
+                    ok_aur, err_aur = self._build_aur_native(pkg_name, env, is_pwless, _safe_progress)
+                    if ok_aur:
+                        self.refresh_installed()
+                        comp_msg = f"✓ Installed {pkg_name} from AUR!"
+                        with self._action_lock:
+                            if self.active_transaction:
+                                self.active_transaction["progress"] = 1.0
+                                self.active_transaction["status"] = comp_msg
+                                self.active_transaction["status_msg"] = comp_msg
+                                self.active_transaction["is_completed"] = True
+                        self._last_progress = 1.0
+                        progress_cb(1.0, comp_msg)
+                        try:
+                            complete_cb(True, action, pkg_name, "")
+                        finally:
+                            self._process_next_action()
+                    else:
+                        with self._action_lock:
+                            self.active_transaction = None
+                            self._last_progress = 0.0
+                        progress_cb(0.0, f"Error: {err_aur}")
+                        try:
+                            complete_cb(False, action, pkg_name, err_aur)
+                        finally:
+                            self._process_next_action()
+                    return
+
+                # Smart source cross-resolution for install & remove
+                is_clean_remove = (action == "clean_remove") or (action == "remove" and getattr(self, "clean_uninstall_default", False))
+                eff_action = "remove" if action in ("remove", "clean_remove") else action
+
+                # If removing a package that isn't in pacman installed_set, check if it's an installed Snap or Docker app
+                if eff_action == "remove":
+                    resolved_target = self.resolve_installed_pkg_name(pkg_name)
+                    if resolved_target not in self.installed_set:
+                        if hasattr(self, "snap_mgr") and self.snap_mgr.is_snap_installed(pkg_name):
+                            self.snap_mgr.remove_snap(
+                                pkg_name,
+                                progress_cb=lambda f, m=None: _safe_progress(float(f) if isinstance(f, (int, float)) else 0.5, str(m or f)),
+                                complete_cb=lambda ok, *a: (
+                                    complete_cb(ok, action, pkg_name, "" if ok else str(a[-1] if a else "Snap remove failed")),
+                                    self._process_next_action()
+                                )
+                            )
+                            return
+                        if hasattr(self, "container_mgr") and self.container_mgr.is_app_installed(pkg_name):
+                            self.container_mgr.uninstall_app(
+                                pkg_name,
+                                progress_callback=lambda m: _safe_progress(0.5, str(m)),
+                                completion_callback=lambda ok, m="": (
+                                    complete_cb(ok, action, pkg_name, "" if ok else m),
+                                    self._process_next_action()
+                                )
+                            )
+                            return
+
+                # If installing, check whether package is in official sync repos or AUR
+                if eff_action == "install" and not is_system_upgrade and self.is_loaded:
+                    pkg_entry = self.packages.get(pkg_name)
+                    in_official_repo = bool(pkg_entry and pkg_entry.get("repo") not in ("local", "deb-local", "aur", ""))
+                    if actual_source == "pacman" and not in_official_repo:
+                        # Automatically switch to AUR if package is not in official sync DB
+                        if aur_helper:
+                            actual_source = "aur"
+                    elif actual_source == "aur" and in_official_repo:
+                        # Package is available as a prebuilt binary in an enabled pacman repo (e.g. CachyOS / Chaotic-AUR)!
+                        actual_source = "pacman"
+
+                # Pacman / AUR command construction
+                if eff_action in ["upgrade", "update"]:
                     if is_system_upgrade:
                         if aur_helper == "paru":
-                            cmd = ["paru", "-Syu", "--needed", "--noconfirm", "--skipreview"]
+                            cmd = ["paru", "-Syu", "--needed", "--noconfirm", "--skipreview"] + aur_sudo_flags
                         elif aur_helper == "yay":
-                            cmd = ["yay", "-Syu", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu"]
+                            cmd = ["yay", "-Syu", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu"] + aur_sudo_flags
                         else:
                             cmd = sudo_prefix + ["pacman", "-Syu", "--needed", "--noconfirm"]
                     else:
                         target = self.resolve_installed_pkg_name(pkg_name)
                         # CRITICAL: For single package update/upgrade, NEVER pass --needed!
-                        # --needed skips already installed packages and exits 0 immediately without updating.
                         if actual_source == "aur":
                             if aur_helper == "paru":
-                                cmd = ["paru", "-S", "--noconfirm", "--skipreview", target]
+                                cmd = ["paru", "-S", "--noconfirm", "--skipreview"] + aur_sudo_flags + [target]
                             elif aur_helper == "yay":
-                                cmd = ["yay", "-S", "--noconfirm", "--nodiffmenu", "--noeditmenu", target]
+                                cmd = ["yay", "-S", "--noconfirm", "--nodiffmenu", "--noeditmenu"] + aur_sudo_flags + [target]
                             else:
                                 cmd = sudo_prefix + ["pacman", "-S", "--noconfirm", target]
                         else:
                             cmd = sudo_prefix + ["pacman", "-S", "--noconfirm", target]
-                elif action == "install":
+                elif eff_action == "install":
                     if actual_source == "pacman":
                         cmd = sudo_prefix + ["pacman", "-S", "--needed", "--noconfirm", pkg_name]
                     else:
                         if aur_helper == "paru":
-                            cmd = ["paru", "-S", "--needed", "--noconfirm", "--skipreview", pkg_name]
+                            cmd = ["paru", "-S", "--needed", "--noconfirm", "--skipreview"] + aur_sudo_flags + [pkg_name]
                         elif aur_helper == "yay":
-                            cmd = ["yay", "-S", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu", pkg_name]
+                            cmd = ["yay", "-S", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu"] + aur_sudo_flags + [pkg_name]
                         else:
                             cmd = sudo_prefix + ["pacman", "-S", "--needed", "--noconfirm", pkg_name]
-                elif action == "remove":
+                elif eff_action == "remove":
                     target = self.resolve_installed_pkg_name(pkg_name)
                     cmd = sudo_prefix + ["pacman", "-Rns", "--noconfirm", target]
                 else:
@@ -3774,29 +4675,137 @@ class PackageManager:
                     upgrades_set = {u.get("name", "").strip().lower() for u in self.upgradable_list if u.get("name")}
 
                 parser = PacmanProgressParser(
-                    action=action,
+                    action=eff_action,
                     target_pkg=target_pkg,
                     is_system_upgrade=is_system_upgrade,
                     upgradable_pkgs=upgrades_set
                 )
 
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=env
-                )
+                tx_logs: List[str] = []
 
-                for line in proc.stdout:
-                    res = parser.process_line(line)
-                    if res:
-                        frac, msg, cur_p, cur_i, tot_p = res
+                wait_for_alpm_lock(progress_cb=_safe_progress, max_wait=180, env=env)
+
+                def _handle_stream_line(raw_line: str):
+                    clean_l = ANSI_ESCAPE.sub("", raw_line).strip()
+                    if clean_l:
+                        tx_logs.append(clean_l)
+                        if len(tx_logs) > 300:
+                            del tx_logs[:-220]
+                        with self._action_lock:
+                            if isinstance(self.active_transaction, dict):
+                                logs_ref = self.active_transaction.setdefault("log_lines", [])
+                                logs_ref.append(clean_l)
+                                if len(logs_ref) > 250:
+                                    del logs_ref[:-200]
+                    res_p = parser.process_line(raw_line)
+                    if res_p:
+                        frac, msg, cur_p, cur_i, tot_p = res_p
                         _safe_progress(frac, msg, cur_p=cur_p, cur_i=cur_i, tot_p=tot_p)
 
-                proc.wait()
-                success = proc.returncode == 0
+                def _run_streamed_cmd(command_list: List[str]) -> int:
+                    with GLOBAL_ALPM_LOCK:
+                        wait_for_alpm_lock(progress_cb=_safe_progress, max_wait=120, env=env)
+                        proc_inner = subprocess.Popen(
+                            command_list,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            bufsize=1,
+                            env=env
+                        )
+                        if proc_inner.stdout:
+                            read_fn = getattr(proc_inner.stdout, "read", None)
+                            if callable(read_fn) and not hasattr(proc_inner.stdout, "_is_mock_iter"):
+                                try:
+                                    buf_chars: List[str] = []
+                                    while True:
+                                        ch = proc_inner.stdout.read(1)
+                                        if not ch:
+                                            if buf_chars:
+                                                _handle_stream_line("".join(buf_chars))
+                                            break
+                                        if ch in ("\r", "\n"):
+                                            if buf_chars:
+                                                _handle_stream_line("".join(buf_chars))
+                                                buf_chars.clear()
+                                        else:
+                                            buf_chars.append(ch)
+                                except TypeError:
+                                    for line in proc_inner.stdout:
+                                        _handle_stream_line(line)
+                            else:
+                                for line in proc_inner.stdout:
+                                    _handle_stream_line(line)
+                        proc_inner.wait()
+                        return proc_inner.returncode
+
+                rc = _run_streamed_cmd(cmd)
+                combined_logs_lower = "\n".join(tx_logs).lower()
+
+                # Multi-stage Resilient Fallbacks for Removal (-Rns -> -Rs -> -R -> -Rscn)
+                if rc != 0 and eff_action == "remove":
+                    target = self.resolve_installed_pkg_name(pkg_name)
+                    # Stage 2: If -Rns failed due to shared dependency or group constraint, try -Rs
+                    if "could not satisfy dependencies" in combined_logs_lower or "breaks dependency" in combined_logs_lower or "target not found" not in combined_logs_lower:
+                        _safe_progress(0.35, f"Retrying removal of {target} (preserving shared dependencies)...")
+                        parser.error_lines.clear()
+                        rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-R", "--noconfirm", target])
+                        if rc != 0:
+                            _safe_progress(0.50, f"Cascading removal of {target} and dependent sub-packages...")
+                            parser.error_lines.clear()
+                            rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-Rscn", "--noconfirm", target])
+
+                # Multi-stage Resilient Fallbacks for Installation
+                elif rc != 0 and eff_action == "install" and not is_system_upgrade:
+                    # 1. If sudo -n failed because passwordless wasn't active for this command, retry with sudo -A
+                    if is_pwless and ("a password is required" in combined_logs_lower or "authentication" in combined_logs_lower):
+                        sudo_prefix = ["sudo", "-A"]
+                        aur_sudo_flags = ["--sudoflags", "-A"]
+                        parser.error_lines.clear()
+                        cmd_retry = [ "sudo", "-A" ] + cmd[2:] if cmd[:2] == ["sudo", "-n"] else cmd
+                        rc = _run_streamed_cmd(cmd_retry)
+                        combined_logs_lower = "\n".join(tx_logs).lower()
+
+                    # 2. If conflict prompt rejected under --noconfirm ('are in conflict'), retry with --ask=4
+                    if rc != 0 and ("are in conflict" in combined_logs_lower or "conflicting" in combined_logs_lower):
+                        _safe_progress(0.20, f"Resolving conflicting package replacement for {pkg_name}...")
+                        parser.error_lines.clear()
+                        rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-S", "--needed", "--noconfirm", "--ask=4", pkg_name])
+                        combined_logs_lower = "\n".join(tx_logs).lower()
+
+                    # 3. If mirror 404 ('failed retrieving file' / '404'), refresh sync DB (-Sy) and retry
+                    if rc != 0 and ("failed retrieving file" in combined_logs_lower or "returned error: 404" in combined_logs_lower):
+                        _safe_progress(0.18, "Refreshing outdated Pacman mirror databases (pacman -Sy)...")
+                        subprocess.run(sudo_prefix + ["pacman", "-Sy", "--noconfirm"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=120)
+                        parser.error_lines.clear()
+                        rc = _run_streamed_cmd(cmd)
+                        combined_logs_lower = "\n".join(tx_logs).lower()
+
+                    # 4. If target not found in pacman repos, fallback to AUR (paru / yay / native makepkg)
+                    if rc != 0 and "target not found" in combined_logs_lower and actual_source == "pacman":
+                        _safe_progress(0.15, f"Searching AUR for {pkg_name}...")
+                        parser.error_lines.clear()
+                        if aur_helper == "paru":
+                            rc = _run_streamed_cmd(["paru", "-S", "--needed", "--noconfirm", "--skipreview"] + aur_sudo_flags + [pkg_name])
+                        elif aur_helper == "yay":
+                            rc = _run_streamed_cmd(["yay", "-S", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu"] + aur_sudo_flags + [pkg_name])
+                        else:
+                            ok_aur, err_aur = self._build_aur_native(pkg_name, env, is_pwless, _safe_progress)
+                            rc = 0 if ok_aur else 1
+                            if not ok_aur:
+                                parser.error_lines.append(err_aur)
+
+                self.last_transaction_logs = list(tx_logs)
+                success = (rc == 0)
+
+                # If Clean Uninstall was requested and removal succeeded, purge user ~/.config, ~/.cache, and ~/.local/share leftovers
+                if success and eff_action == "remove" and is_clean_remove:
+                    target = self.resolve_installed_pkg_name(pkg_name)
+                    _safe_progress(0.92, f"Cleaning residual app caches & configuration for {target}...")
+                    self.purge_app_leftovers(target, original_name=pkg_name)
                 if success:
                     # Record which packages were updated so check_updates can exclude them temporarily
                     resolved_inst = self.resolve_installed_pkg_name(pkg_name) if pkg_name else ""
@@ -3856,8 +4865,8 @@ class PackageManager:
                 else:
                     if any("password" in l.lower() or "auth" in l.lower() for l in parser.error_lines):
                         PackageManager.clear_auth_cache()
-                    err_status = parser.get_error_message(proc.returncode)
-                    raw_err = "\n".join(parser.error_lines[-3:]) if parser.error_lines else f"Exited with code {proc.returncode}"
+                    err_status = parser.get_error_message(rc)
+                    raw_err = "\n".join(parser.error_lines[-3:]) if parser.error_lines else f"Exited with code {rc}"
                     with self._action_lock:
                         if self.active_transaction:
                             self.active_transaction["progress"] = 0.0
@@ -3888,6 +4897,245 @@ class PackageManager:
                     self._process_next_action()
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # Known mapping of package names to user config/cache/data folder names for Clean Uninstall
+    APP_DATA_DIRECTORIES: Dict[str, List[str]] = {
+        "code": ["Code", "Code - OSS", "VSCodium"],
+        "visual-studio-code-bin": ["Code", "Code - OSS"],
+        "code-oss": ["Code - OSS", "Code"],
+        "brave-bin": ["BraveSoftware/Brave-Browser", "BraveSoftware"],
+        "brave": ["BraveSoftware/Brave-Browser", "BraveSoftware"],
+        "google-chrome": ["google-chrome"],
+        "chromium": ["chromium"],
+        "firefox": ["mozilla/firefox"],
+        "zen-browser-bin": ["zen"],
+        "discord": ["discord"],
+        "vesktop": ["vesktop"],
+        "spotify": ["spotify"],
+        "obs-studio": ["obs-studio"],
+        "vlc": ["vlc"],
+        "mpv": ["mpv"],
+        "gimp": ["GIMP"],
+        "blender": ["blender"],
+        "inkscape": ["inkscape"],
+        "kdenlive": ["kdenlive"],
+        "audacity": ["audacity"],
+        "telegram-desktop": ["TelegramDesktop"],
+        "signal-desktop": ["Signal"],
+        "obsidian": ["obsidian"],
+        "libreoffice-fresh": ["libreoffice"],
+        "libreoffice-still": ["libreoffice"],
+        "lutris": ["lutris"],
+        "heroic-games-launcher-bin": ["heroic"],
+        "bottles": ["bottles"],
+        "prismlauncher": ["PrismLauncher"],
+        "retroarch": ["retroarch"],
+        "ryujinx-bin": ["Ryujinx"],
+        "bitwarden": ["Bitwarden"],
+        "keepassxc": ["keepassxc"],
+        "postman-bin": ["Postman"],
+        "dbeaver": ["DBeaverData"],
+        "zed": ["zed"],
+        "joplin-desktop": ["Joplin", "joplin-desktop"],
+        "onlyoffice-bin": ["onlyoffice"],
+        "anytype-bin": ["anytype"],
+        "thunderbird": ["thunderbird"],
+    }
+
+    # Protected user directories that must NEVER be deleted during Clean Uninstall
+    PROTECTED_USER_DIRS: Set[str] = {
+        "hypr", "waybar", "rofi", "wofi", "fuzzel", "swaync", "mako", "dunst", "swww",
+        "gtk-2.0", "gtk-3.0", "gtk-4.0", "qt5ct", "qt6ct", "Kvantum", "dconf", "systemd",
+        "pulse", "pipewire", "wireplumber", "fontconfig", "ibus", "fcitx5", "mime",
+        "applications", "icons", "fonts", "themes", "keyrings", "gnupg", "ssh", "aura",
+        "fish", "zsh", "bash", "nvim", "neovim", "git", "alacritty", "kitty", "foot",
+        "user-dirs.dirs", "user-dirs.locale", "autostart",
+    }
+
+    def purge_app_leftovers(self, pkg_name: str, original_name: str = "") -> List[str]:
+        """
+        Safely purge residual user-space configuration (~/.config), cache (~/.cache),
+        and local data (~/.local/share, ~/.local/state) directories after uninstalling an application.
+        Returns list of cleaned directory paths.
+        """
+        cleaned_paths: List[str] = []
+        candidates: Set[str] = set()
+        for raw in (pkg_name, original_name):
+            if not raw:
+                continue
+            r_low = raw.strip().lower()
+            candidates.add(r_low)
+            base = re.sub(r'-(bin|git|hg|svn|pure|gtk-app|qt-app|gui|cli|daemon|desktop|launcher|fresh|still)$', '', r_low)
+            if base:
+                candidates.add(base)
+            if r_low in self.APP_DATA_DIRECTORIES:
+                candidates.update(self.APP_DATA_DIRECTORIES[r_low])
+            if base in self.APP_DATA_DIRECTORIES:
+                candidates.update(self.APP_DATA_DIRECTORIES[base])
+
+        home = Path.home()
+        roots = [
+            home / ".config",
+            home / ".cache",
+            home / ".local" / "share",
+            home / ".local" / "state",
+        ]
+
+        for cand in candidates:
+            if not cand or len(cand) < 3:
+                continue
+            cand_top = cand.split("/")[0]
+            if cand_top in self.PROTECTED_USER_DIRS or cand_top.lower() in {x.lower() for x in self.PROTECTED_USER_DIRS}:
+                continue
+            for root_dir in roots:
+                if not root_dir.exists():
+                    continue
+                # Check exact match or case-insensitive directory match inside root_dir
+                target_path = root_dir / cand
+                if target_path.exists() and target_path.is_dir() and not target_path.is_symlink():
+                    try:
+                        shutil.rmtree(target_path, ignore_errors=True)
+                        cleaned_paths.append(str(target_path))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        for entry in os.scandir(root_dir):
+                            if entry.is_dir(follow_symlinks=False):
+                                ename_low = entry.name.lower()
+                                if ename_low in {x.lower() for x in self.PROTECTED_USER_DIRS}:
+                                    continue
+                                if ename_low == cand.lower():
+                                    shutil.rmtree(entry.path, ignore_errors=True)
+                                    cleaned_paths.append(entry.path)
+                    except Exception:
+                        pass
+
+        # Clean orphaned .desktop overrides in ~/.local/share/applications
+        user_apps_dir = home / ".local" / "share" / "applications"
+        if user_apps_dir.exists():
+            for cand in candidates:
+                for dt in user_apps_dir.glob(f"*{cand.lower()}*.desktop"):
+                    if dt.name == "io.github.aura.desktop":
+                        continue
+                    try:
+                        dt.unlink()
+                        cleaned_paths.append(str(dt))
+                    except Exception:
+                        pass
+            if shutil.which("update-desktop-database"):
+                try:
+                    subprocess.run(["update-desktop-database", str(user_apps_dir)], capture_output=True, timeout=3)
+                except Exception:
+                    pass
+
+        return cleaned_paths
+
+    @classmethod
+    def has_valid_sudo_session(cls) -> bool:
+        """Return True if passwordless sudo is active, sudo timestamp is warm, or session token exists."""
+        if cls.is_passwordless_configured():
+            return True
+        try:
+            token_path = Path(f"/run/user/{os.getuid()}/.aura_session_pass")
+            if token_path.exists() and token_path.stat().st_size > 0:
+                return True
+        except Exception:
+            pass
+        try:
+            res = subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def authenticate_session(cls, password: str, enable_passwordless: bool = False) -> Tuple[bool, str]:
+        """
+        Verify administrator password once in-app and either configure passwordless mode
+        or store an ephemeral 0600 session token in /run/user/$UID (tmpfs RAM) cleared on exit.
+        """
+        if not password:
+            return False, "Password cannot be empty."
+        if enable_passwordless:
+            ok, msg = cls.configure_passwordless(password)
+            if ok:
+                return True, msg
+
+        try:
+            proc = subprocess.run(
+                ["sudo", "-S", "-v"],
+                input=f"{password}\n",
+                text=True,
+                capture_output=True,
+                timeout=5
+            )
+            if proc.returncode != 0:
+                return False, "Incorrect administrator password. Please try again."
+            token_dir = Path(f"/run/user/{os.getuid()}")
+            if token_dir.exists():
+                token_path = token_dir / ".aura_session_pass"
+                token_path.write_text(password + "\n", encoding="utf-8")
+                token_path.chmod(0o600)
+            return True, "Session authenticated."
+        except Exception as e:
+            return False, f"Authentication failed: {e}"
+
+    def _build_aur_native(
+        self,
+        pkg_name: str,
+        env: Dict[str, str],
+        is_pwless: bool,
+        progress_fn: Callable[[float, str], None]
+    ) -> Tuple[bool, str]:
+        """Fallback native AUR builder using git clone + makepkg when neither paru nor yay is installed."""
+        if not shutil.which("git") or not shutil.which("makepkg"):
+            return False, "Neither an AUR helper (paru/yay) nor git/makepkg is installed."
+        tmp_dir = tempfile.mkdtemp(prefix=f"aura-aur-{pkg_name}-")
+        try:
+            progress_fn(0.15, f"Cloning {pkg_name} from AUR...")
+            clone_url = f"https://aur.archlinux.org/{pkg_name}.git"
+            cproc = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, tmp_dir],
+                capture_output=True, text=True, env=env, timeout=60
+            )
+            if cproc.returncode != 0:
+                return False, f"Failed cloning AUR repository: {cproc.stderr or cproc.stdout}"
+            if not (Path(tmp_dir) / "PKGBUILD").exists():
+                return False, f"Package '{pkg_name}' not found in AUR."
+
+            progress_fn(0.35, f"Compiling & installing {pkg_name} via makepkg...")
+            build_env = dict(env)
+            build_env["PACMAN_AUTH"] = "sudo -n" if is_pwless else "sudo -A"
+            proc = subprocess.Popen(
+                ["makepkg", "-si", "--noconfirm", "--needed"],
+                cwd=tmp_dir,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=build_env
+            )
+            last_lines = []
+            for line in proc.stdout:
+                clean = ANSI_ESCAPE.sub("", line).strip()
+                if clean:
+                    last_lines.append(clean)
+                    if "downloading" in clean.lower():
+                        progress_fn(0.45, clean[:80])
+                    elif "making package:" in clean.lower() or "compiling" in clean.lower():
+                        progress_fn(0.65, clean[:80])
+                    elif "installing" in clean.lower() or "loading package" in clean.lower():
+                        progress_fn(0.85, clean[:80])
+            proc.wait()
+            if proc.returncode == 0:
+                return True, ""
+            err_tail = "\n".join(last_lines[-3:]) if last_lines else f"makepkg exited with {proc.returncode}"
+            return False, err_tail
+        except Exception as e:
+            return False, str(e)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     @staticmethod
     def get_vault_path() -> Path:
@@ -3935,7 +5183,7 @@ class PackageManager:
 
         # 2. Prepare temporary sudoers file with narrow pacman-only alias
         user = os.environ.get("USER") or "wheel"
-        sudoers_content = f"Cmnd_Alias AURA_PACMAN = /usr/bin/pacman\n{user} ALL=(root) NOPASSWD: AURA_PACMAN\n"
+        sudoers_content = f"Cmnd_Alias AURA_PACMAN = /usr/bin/pacman, /usr/bin/snap, /usr/bin/systemctl, /usr/bin/paccache, /usr/bin/journalctl, /usr/bin/pacman-key, /usr/bin/ln, /usr/bin/mkdir\n{user} ALL=(root) NOPASSWD: AURA_PACMAN\n"
 
         tmp_path = None
         try:
@@ -3984,25 +5232,61 @@ class PackageManager:
     @classmethod
     def remove_passwordless(cls, password: Optional[str] = None) -> Tuple[bool, str]:
         """
-        Reversible de-authorization: removes /etc/sudoers.d/99-aura-pacman and clears legacy vault files.
+        Reversible de-authorization: removes /etc/sudoers.d/99-aura-pacman (and legacy rules),
+        invalidates sudo timestamp cache (sudo -k), and clears legacy vault files.
+        Note: On Arch Linux, /etc/sudoers.d is 0750 root:root, so non-root Path.exists()
+        returns False even when the file exists! We therefore check both is_passwordless_configured()
+        and rule_path.exists(), remove all Aura sudoers drop-ins via sudo -n / sudo -S / sudo -A,
+        and immediately run 'sudo -k' so cached sudo timestamps do not keep sudo -n active.
         """
         try:
             rule_path = Path("/etc/sudoers.d/99-aura-pacman")
+            all_rules = ["/etc/sudoers.d/99-aura-pacman", "/etc/sudoers.d/aura-pacman"]
+
             if not rule_path.exists():
                 cls.get_vault_path().unlink(missing_ok=True)
                 cls.clear_auth_cache()
                 return True, "Passwordless mode is already disabled."
 
-            # First attempt sudo -n rm
-            proc = subprocess.run(["sudo", "-n", "rm", "-f", "/etc/sudoers.d/99-aura-pacman"], capture_output=True, text=True, timeout=5)
-            if proc.returncode != 0 and password:
-                proc = subprocess.run(
-                    ["sudo", "-S", "rm", "-f", "/etc/sudoers.d/99-aura-pacman"],
-                    input=f"{password}\n",
-                    text=True,
-                    capture_output=True,
-                    timeout=5
-                )
+            # 1. First attempt sudo -n rm (works if user has active sudo timestamp or general NOPASSWD)
+            proc = subprocess.run(
+                ["sudo", "-n", "rm", "-f", "/etc/sudoers.d/99-aura-pacman"],
+                capture_output=True, text=True, timeout=5
+            )
+
+            # 2. If sudo -n rm failed, use provided password or ephemeral session token via sudo -S
+            if proc.returncode != 0:
+                eff_pass = password
+                if not eff_pass:
+                    try:
+                        token_path = Path(f"/run/user/{os.getuid()}/.aura_session_pass")
+                        if token_path.exists():
+                            eff_pass = token_path.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                if eff_pass:
+                    proc = subprocess.run(
+                        ["sudo", "-S", "rm", "-f"] + all_rules,
+                        input=f"{eff_pass}\n",
+                        text=True,
+                        capture_output=True,
+                        timeout=8
+                    )
+
+            # 3. If still not removed and graphical askpass helper is available, prompt via sudo -A
+            if proc.returncode != 0:
+                askpass = get_askpass_script()
+                if askpass.exists() and (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+                    env = os.environ.copy()
+                    env["SUDO_ASKPASS"] = str(askpass)
+                    proc = subprocess.run(
+                        ["sudo", "-A", "rm", "-f"] + all_rules,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                        timeout=60
+                    )
 
             cls.get_vault_path().unlink(missing_ok=True)
             cls.clear_auth_cache()
@@ -4010,18 +5294,19 @@ class PackageManager:
             if not rule_path.exists():
                 return True, "Passwordless mode disabled successfully."
             else:
-                return False, "Failed to remove sudoers configuration rule."
+                return False, "Failed to remove sudoers configuration rule. Please enter your administrator password."
         except Exception as e:
             return False, f"Error disabling passwordless mode: {e}"
 
     @staticmethod
     def clear_auth_cache():
         """Clear cached session tokens and legacy vaults."""
-        try:
-            token = Path(f"/run/user/{os.getuid()}/aura_auth.token")
-            token.unlink(missing_ok=True)
-        except Exception:
-            pass
+        for tname in ("aura_auth.token", ".aura_session_pass"):
+            try:
+                token = Path(f"/run/user/{os.getuid()}/{tname}")
+                token.unlink(missing_ok=True)
+            except Exception:
+                pass
         try:
             vault = Path.home() / ".local" / "share" / "aura" / ".aura_vault"
             vault.unlink(missing_ok=True)
@@ -4285,6 +5570,8 @@ class SnapManager:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._snap_op_lock = threading.RLock()
+        self.active_snap_ops: Dict[str, Tuple[float, str]] = {}
         self._search_cache: Dict[str, List[Dict[str, Any]]] = {}
         self.is_setting_up: bool = False
         self.setup_progress_text: str = ""
@@ -4314,7 +5601,7 @@ class SnapManager:
             return True
         if shutil.which("systemctl"):
             try:
-                proc = subprocess.run(["systemctl", "is-active", "--quiet", "snapd.socket"], timeout=2)
+                proc = subprocess.run(["systemctl", "is-active", "--quiet", "snapd.socket"], capture_output=True, timeout=2)
                 return proc.returncode == 0
             except Exception:
                 pass
@@ -4488,11 +5775,16 @@ class SnapManager:
                 else:
                     _report(0.5, "Snap package found, verifying service and confinement symlinks...")
 
+                # Helper that tries sudo -n first and falls back to sudo -A if sudoers only covers pacman
+                def _run_root(args_list, timeout_s=30):
+                    r = subprocess.run(["sudo", "-n"] + args_list, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=timeout_s)
+                    if r.returncode != 0 and ("password is required" in (r.stderr or "").lower() or "authentication" in (r.stderr or "").lower()):
+                        r = subprocess.run(["sudo", "-A"] + args_list, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=timeout_s)
+                    return r
+
                 # Step 2: Enable and start snapd.socket
-                sudo_prefix = ["sudo", "-n"] if PackageManager.is_passwordless_configured() else ["sudo", "-A"]
                 _report(0.6, "Enabling and starting snapd.socket...")
-                res = subprocess.run(sudo_prefix + ["systemctl", "enable", "--now", "snapd.socket"],
-                                     capture_output=True, text=True, env=env, timeout=30)
+                res = _run_root(["systemctl", "enable", "--now", "snapd.socket"], timeout_s=30)
                 if res.returncode != 0:
                     err_msg = self._parse_build_error(res.stderr, res.stdout)
                     if completion_callback:
@@ -4502,11 +5794,10 @@ class SnapManager:
                 # Step 3: Symlink /var/lib/snapd/snap /snap
                 _report(0.8, "Creating /snap classical confinement symlink...")
                 if not (Path("/snap").is_symlink() or Path("/snap").exists()):
-                    res_ln = subprocess.run(sudo_prefix + ["ln", "-s", "/var/lib/snapd/snap", "/snap"],
-                                           capture_output=True, text=True, env=env, timeout=10)
+                    res_ln = _run_root(["ln", "-s", "/var/lib/snapd/snap", "/snap"], timeout_s=10)
                     if res_ln.returncode != 0 and not Path("/snap").exists():
-                        subprocess.run(sudo_prefix + ["mkdir", "-p", "/var/lib/snapd/snap"], capture_output=True, env=env, timeout=5)
-                        subprocess.run(sudo_prefix + ["ln", "-s", "/var/lib/snapd/snap", "/snap"], capture_output=True, env=env, timeout=10)
+                        _run_root(["mkdir", "-p", "/var/lib/snapd/snap"], timeout_s=5)
+                        _run_root(["ln", "-s", "/var/lib/snapd/snap", "/snap"], timeout_s=10)
 
                 # Step 4: Verify socket and status
                 time.sleep(1)
@@ -5038,11 +6329,93 @@ class SnapManager:
             "is_installed": self.is_snap_installed(snap_name),
         }
 
+    def _stream_snap_cmd(self, snap_args: List[str], env: Dict[str, str], progress_cb, start_msg: str = "") -> Tuple[int, List[str]]:
+        """
+        Execute a privileged snap command, streaming both '\r' and '\n' progress lines
+        and automatically falling back from sudo -n to sudo -A if password is required.
+        """
+        # Ensure snapd.socket and /snap symlink are ready before running snap install
+        if not self.is_snapd_running():
+            subprocess.run(["sudo", "-n", "systemctl", "start", "snapd.socket"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=10)
+            if not self.is_snapd_running():
+                subprocess.run(["sudo", "-A", "systemctl", "start", "snapd.socket"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=20)
+        if not (Path("/snap").is_symlink() or Path("/snap").exists()):
+            subprocess.run(["sudo", "-n", "ln", "-s", "/var/lib/snapd/snap", "/snap"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=5)
+            if not (Path("/snap").is_symlink() or Path("/snap").exists()):
+                subprocess.run(["sudo", "-A", "ln", "-s", "/var/lib/snapd/snap", "/snap"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
+
+        def _run_once(sudo_flag: str) -> Tuple[int, List[str]]:
+            cmd = ["sudo", sudo_flag] + snap_args
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,
+                env=env
+            )
+            output_lines: List[str] = []
+            buf = bytearray()
+            cur_frac = 0.14
+            if proc.stdout:
+                while True:
+                    ch = proc.stdout.read(1)
+                    if not ch:
+                        if buf:
+                            raw_line = buf.decode("utf-8", errors="replace")
+                            clean = ANSI_ESCAPE.sub("", raw_line).strip()
+                            if clean:
+                                output_lines.append(clean)
+                                if "a password is required" not in clean.lower():
+                                    self._call_progress(progress_cb, cur_frac, clean)
+                        break
+                    if ch in (b"\r", b"\n"):
+                        if buf:
+                            raw_line = buf.decode("utf-8", errors="replace")
+                            buf.clear()
+                            clean = ANSI_ESCAPE.sub("", raw_line).strip()
+                            if clean:
+                                output_lines.append(clean)
+                                if len(output_lines) > 200:
+                                    del output_lines[:-150]
+                                m_pct = re.search(r'(\d{1,3})%', clean)
+                                if m_pct:
+                                    pct_val = min(99, max(1, int(m_pct.group(1))))
+                                    cur_frac = round(0.12 + (pct_val / 100.0) * 0.82, 3)
+                                else:
+                                    cur_frac = min(0.92, round(cur_frac + 0.04, 3))
+                                if "a password is required" not in clean.lower():
+                                    self._call_progress(progress_cb, cur_frac, clean[:95])
+                    else:
+                        buf.extend(ch)
+            proc.wait()
+            return proc.returncode, output_lines
+
+        snap_lock = getattr(self, "_snap_op_lock", None) or threading.RLock()
+        with snap_lock:
+            rc, lines = _run_once("-n")
+            combined_low = "\n".join(lines).lower()
+            used_flag = "-n"
+            if rc != 0 and ("a password is required" in combined_low or "authentication" in combined_low or not lines):
+                used_flag = "-A"
+                rc, lines = _run_once("-A")
+                combined_low = "\n".join(lines).lower()
+
+            if rc != 0 and ("change in progress" in combined_low or "conflicts with" in combined_low):
+                for wait_idx in range(10):
+                    self._call_progress(progress_cb, 0.14, f"Waiting for background snapd task to complete ({wait_idx + 1}/10)...")
+                    time.sleep(2.0)
+                    rc, lines = _run_once(used_flag)
+                    combined_low = "\n".join(lines).lower()
+                    if rc == 0 or "change in progress" not in combined_low:
+                        break
+            return rc, lines
+
     def install_snap(self, name: str, classic: bool = False, progress_cb = None, complete_cb = None):
-        """Install a snap package using 'sudo -A snap install'."""
+        """Install a snap package using 'sudo snap install' with live \r/\n progress streaming and classic fallback."""
         def _task():
             if not self.is_snapd_installed():
-                err_msg = "snapd service is required to install Snap packages. Install snapd and run: sudo systemctl enable --now snapd.socket"
+                err_msg = "snapd service is required to install Snap packages. Click 'Auto-Configure' on the Snap Store page."
                 self._call_progress(progress_cb, 0.0, err_msg)
                 self._call_complete(complete_cb, False, "install", name, err_msg)
                 return
@@ -5057,52 +6430,56 @@ class SnapManager:
                     if details.get("confinement") == "classic":
                         is_classic = True
 
-            cmd = ["sudo", "-A", "snap", "install"]
+            snap_args = ["snap", "install"]
             if is_classic:
-                cmd.append("--classic")
-            cmd.append(name)
+                snap_args.append("--classic")
+            snap_args.append(name)
 
             env = os.environ.copy()
             if ASKPASS_SCRIPT.exists():
                 env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
             env["LC_ALL"] = "C"
 
-            self._call_progress(progress_cb, 0.1, f"Installing snap package {name}...")
+            snap_key = name.strip().lower()
+            if not hasattr(self, "active_snap_ops"):
+                self.active_snap_ops = {}
+            self.active_snap_ops[snap_key] = (0.10, f"Installing snap package {name}...")
+
+            def _tracked_prog(f, m=""):
+                if isinstance(f, (int, float)):
+                    self.active_snap_ops[snap_key] = (float(f), str(m))
+                self._call_progress(progress_cb, f, m)
+
+            _tracked_prog(0.10, f"Installing snap package {name}...")
 
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=env
-                )
-                output_lines = []
-                for line in proc.stdout:
-                    line_str = line.strip()
-                    if line_str:
-                        output_lines.append(line_str)
-                        self._call_progress(progress_cb, 0.5, line_str)
+                rc, output_lines = self._stream_snap_cmd(snap_args, env, _tracked_prog, f"Installing {name}...")
+                combined_low = "\n".join(output_lines).lower()
+                # Automatic fallback: if snap reports classic confinement required, retry with --classic!
+                if rc != 0 and ("classic confinement" in combined_low or "--classic" in combined_low) and "--classic" not in snap_args:
+                    self._call_progress(progress_cb, 0.18, f"Retrying {name} with --classic confinement...")
+                    rc, output_lines = self._stream_snap_cmd(["snap", "install", "--classic", name], env, progress_cb, f"Installing {name} (classic)...")
 
-                proc.wait()
-                if proc.returncode == 0:
+                if rc == 0:
                     self._installed_snaps_cache = None
                     self._status_cache = None
                     self._call_progress(progress_cb, 1.0, f"Successfully installed {name}!")
                     self._call_complete(complete_cb, True, "install", name, "")
                 else:
-                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {proc.returncode}"
+                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {rc}"
                     self._call_progress(progress_cb, 0.0, f"Installation failed: {err}")
                     self._call_complete(complete_cb, False, "install", name, err)
             except Exception as e:
                 self._call_progress(progress_cb, 0.0, f"Error: {e}")
                 self._call_complete(complete_cb, False, "install", name, str(e))
+            finally:
+                if hasattr(self, "active_snap_ops"):
+                    self.active_snap_ops.pop(snap_key, None)
 
         threading.Thread(target=_task, daemon=True).start()
 
     def remove_snap(self, name: str, progress_cb = None, complete_cb = None):
-        """Remove a snap package using 'sudo -A snap remove'."""
+        """Remove a snap package using _stream_snap_cmd with live progress and sudo fallback."""
         def _task():
             if not self.is_snapd_installed():
                 err_msg = "snapd is not installed."
@@ -5110,38 +6487,21 @@ class SnapManager:
                 self._call_complete(complete_cb, False, "remove", name, err_msg)
                 return
 
-            cmd = ["sudo", "-A", "snap", "remove", name]
             env = os.environ.copy()
             if ASKPASS_SCRIPT.exists():
                 env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
             env["LC_ALL"] = "C"
 
-            self._call_progress(progress_cb, 0.1, f"Removing snap package {name}...")
-
+            self._call_progress(progress_cb, 0.08, f"Removing snap package {name}...")
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=env
-                )
-                output_lines = []
-                for line in proc.stdout:
-                    line_str = line.strip()
-                    if line_str:
-                        output_lines.append(line_str)
-                        self._call_progress(progress_cb, 0.5, line_str)
-
-                proc.wait()
-                if proc.returncode == 0:
+                rc, output_lines = self._stream_snap_cmd(["snap", "remove", name], env, progress_cb, f"Removing snap package {name}...")
+                if rc == 0:
                     self._installed_snaps_cache = None
                     self._status_cache = None
                     self._call_progress(progress_cb, 1.0, f"Successfully removed {name}!")
                     self._call_complete(complete_cb, True, "remove", name, "")
                 else:
-                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {proc.returncode}"
+                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {rc}"
                     self._call_progress(progress_cb, 0.0, f"Removal failed: {err}")
                     self._call_complete(complete_cb, False, "remove", name, err)
             except Exception as e:
@@ -5151,7 +6511,7 @@ class SnapManager:
         threading.Thread(target=_task, daemon=True).start()
 
     def update_snap(self, name: str, progress_cb = None, complete_cb = None):
-        """Refresh / update a snap package using 'sudo -A snap refresh'."""
+        """Refresh / update a snap package using _stream_snap_cmd with live progress."""
         def _task():
             if not self.is_snapd_installed():
                 err_msg = "snapd is not installed."
@@ -5159,36 +6519,21 @@ class SnapManager:
                 self._call_complete(complete_cb, False, "update", name, err_msg)
                 return
 
-            cmd = ["sudo", "-A", "snap", "refresh", name]
             env = os.environ.copy()
             if ASKPASS_SCRIPT.exists():
                 env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
             env["LC_ALL"] = "C"
 
-            self._call_progress(progress_cb, 0.1, f"Refreshing snap package {name}...")
-
+            self._call_progress(progress_cb, 0.08, f"Refreshing snap package {name}...")
             try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=env
-                )
-                output_lines = []
-                for line in proc.stdout:
-                    line_str = line.strip()
-                    if line_str:
-                        output_lines.append(line_str)
-                        self._call_progress(progress_cb, 0.5, line_str)
-
-                proc.wait()
-                if proc.returncode == 0:
+                rc, output_lines = self._stream_snap_cmd(["snap", "refresh", name], env, progress_cb, f"Refreshing snap package {name}...")
+                if rc == 0:
+                    self._installed_snaps_cache = None
+                    self._status_cache = None
                     self._call_progress(progress_cb, 1.0, f"Successfully refreshed {name}!")
                     self._call_complete(complete_cb, True, "update", name, "")
                 else:
-                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {proc.returncode}"
+                    err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {rc}"
                     self._call_progress(progress_cb, 0.0, f"Refresh failed: {err}")
                     self._call_complete(complete_cb, False, "update", name, err)
             except Exception as e:
@@ -5279,8 +6624,8 @@ class ContainerManager:
             "desc": "Sandboxed developer code editor and language runtime environment",
             "category": "Development",
             "icon": "code",
-            "binary": "code",
-            "pkg": "code",
+            "binary": "code-oss",
+            "pkg": "code-oss",
             "size": "95 MB",
         },
         {
@@ -5294,18 +6639,18 @@ class ContainerManager:
             "size": "70 MB",
         },
         {
-            "id": "discord",
-            "name": "Discord",
-            "desc": "Sandboxed voice, video, and text communication platform",
-            "category": "Social & Communication",
-            "icon": "discord",
-            "binary": "discord",
-            "pkg": "discord",
-            "size": "85 MB",
+            "id": "chromium",
+            "name": "Chromium Browser",
+            "desc": "Sandboxed open-source web browser running inside isolated container",
+            "category": "Internet & Network",
+            "icon": "chromium",
+            "binary": "chromium-browser",
+            "pkg": "chromium",
+            "size": "115 MB",
         },
         {
             "id": "gimp",
-            "name": "GNU Image Manipulation (GIMP)",
+            "name": "GIMP Image Studio",
             "desc": "High-powered image retouching, composition and digital artwork",
             "category": "Graphics & Media",
             "icon": "gimp",
@@ -5315,7 +6660,7 @@ class ContainerManager:
         },
         {
             "id": "inkscape",
-            "name": "Inkscape Vector Graphics",
+            "name": "Inkscape",
             "desc": "Professional vector graphics editor for diagrams and illustrations",
             "category": "Graphics & Media",
             "icon": "org.inkscape.Inkscape",
@@ -5387,8 +6732,14 @@ class ContainerManager:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self.SHORTCUTS_DIR.mkdir(parents=True, exist_ok=True)
+        self._apk_lock = threading.RLock()
+        self._config_lock = threading.RLock()
+        try:
+            self.SHORTCUTS_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         self.active_container_installs: Set[str] = set()
+        self.active_container_progress: Dict[str, Tuple[float, str]] = {}
         self.is_configuring: bool = False
         self.configuring_progress_text: str = ""
         self._status_cache: Optional[Dict[str, Any]] = None
@@ -5519,92 +6870,161 @@ class ContainerManager:
                 completion_callback(True, f"Docker service disabled. Stopped other containers: {other_containers or 'none'}.")
         threading.Thread(target=_task, daemon=True).start()
 
-    def ensure_container_configured(self, progress_callback: Optional[Callable[[str], None]] = None) -> Tuple[bool, str]:
-        """Auto create and start Docker container if not running."""
-        with self._lock:
-            if self.is_configuring:
-                return False, "Docker container configuration is already in progress."
-            self.is_configuring = True
-            self.configuring_progress_text = "Initializing Docker environment..."
+    def _run_apk(self, apk_args: List[str], timeout: int = 180) -> subprocess.CompletedProcess:
+        """
+        Thread-safe, lock-resilient Alpine apk runner inside aura-box:
+        1. Acquires self._apk_lock so concurrent threads in Aura never collide on /lib/apk/db/lock.
+        2. Passes '--wait 30' to apk so it waits if a background container task is finishing.
+        3. If apk still reports 'Unable to lock database', waits for any running apk inside the
+           container or clears a stale orphaned /lib/apk/db/lock and retries automatically.
+        """
+        apk_lock = getattr(self, "_apk_lock", None)
+        if apk_lock is None:
+            self._apk_lock = threading.RLock()
+            apk_lock = self._apk_lock
 
+        with apk_lock:
+            # Ensure community repository is enabled inside Alpine container
+            cmd = ["docker", "exec", self.CONTAINER_NAME, "apk", "--wait", "30"] + apk_args
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            combined = ((proc.stderr or "") + "\n" + (proc.stdout or "")).lower()
+            if proc.returncode != 0 and ("unable to lock database" in combined or "failed to open apk database" in combined):
+                # Check if an apk process is actively running inside the container
+                for _ in range(10):
+                    chk = subprocess.run(["docker", "exec", self.CONTAINER_NAME, "pgrep", "-x", "apk"], capture_output=True, timeout=5)
+                    if chk.returncode != 0:
+                        break
+                    time.sleep(1.5)
+                # If no apk process is running inside aura-box, ensure /lib/apk/db is writable and retry
+                chk2 = subprocess.run(["docker", "exec", self.CONTAINER_NAME, "pgrep", "-x", "apk"], capture_output=True, timeout=5)
+                if chk2.returncode != 0:
+                    subprocess.run(["docker", "exec", self.CONTAINER_NAME, "rm", "-f", "/lib/apk/db/lock"], capture_output=True, timeout=5)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+                combined = ((proc.stderr or "") + "\n" + (proc.stdout or "")).lower()
+
+            # If package not found because edge/community repo wasn't indexed yet, update index & retry once
+            if proc.returncode != 0 and ("no such package" in combined or "unsatisfiable constraints" in combined):
+                subprocess.run(
+                    ["docker", "exec", self.CONTAINER_NAME, "sh", "-c",
+                     r"grep -q '/community' /etc/apk/repositories || sed -i 's/^#\(.*\/community\)/\1/' /etc/apk/repositories; apk --wait 30 update"],
+                    capture_output=True, text=True, timeout=60
+                )
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return proc
+
+    def ensure_container_configured(self, progress_callback: Optional[Callable[[str], None]] = None) -> Tuple[bool, str]:
+        """
+        Auto create and start Docker container if not running.
+        Serialized via self._config_lock so multiple simultaneous Docker app installs wait
+        cleanly for container initialization instead of failing with a concurrent setup error.
+        """
         def _report(msg: str):
             self.configuring_progress_text = msg
             if progress_callback:
                 progress_callback(msg)
 
-        try:
+        cfg_lock = getattr(self, "_config_lock", None)
+        if cfg_lock is None:
+            self._config_lock = threading.RLock()
+            cfg_lock = self._config_lock
+
+        with cfg_lock:
             status = self.get_status()
             if status["status_code"] == "ready":
                 return True, "Container already configured and active."
-            
-            if status["status_code"] == "missing_engine":
-                return False, "Docker is not installed or daemon is not running."
 
-            if status["status_code"] == "stopped":
-                _report(f"Starting existing '{self.CONTAINER_NAME}' container...")
-                proc = subprocess.run(["docker", "start", self.CONTAINER_NAME], capture_output=True, text=True, timeout=10)
-                if proc.returncode == 0:
-                    subprocess.run(["docker", "update", "--restart", "unless-stopped", self.CONTAINER_NAME], capture_output=True, timeout=5)
-                    _report("Installing baseline GUI libraries (mesa, x11, fonts)...")
-                    subprocess.run(["docker", "exec", self.CONTAINER_NAME, "apk", "add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], capture_output=True, timeout=60)
-                    return True, "Started existing aura-box container."
-                return False, f"Failed to start container: {proc.stderr}"
-
-            # Create and start new container with hardened security boundaries
-            # (AURA-005, AURA-006, AURA-007, AURA-008, AURA-101, AURA-102)
-            _report(f"Initializing '{self.CONTAINER_NAME}' container environment (Alpine Linux)...")
-
-            uid = os.getuid()
-            gid = os.getgid()
-            runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-            display = os.environ.get("DISPLAY", ":0")
-            wayland = os.environ.get("WAYLAND_DISPLAY", "wayland-1")
-
-            # Dedicated sandboxed application directory (Never mount whole $HOME rw!)
-            app_data_dir = Path.home() / ".local" / "share" / "aura" / "containers"
-            app_data_dir.mkdir(parents=True, exist_ok=True)
-
-            cmd = [
-                "docker", "run", "-d",
-                "--name", self.CONTAINER_NAME,
-                "--restart", "unless-stopped",
-                "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-                "-v", f"{app_data_dir}:/home/aura-user/app-data",
-                "-e", f"DISPLAY={display}",
-                "-e", f"WAYLAND_DISPLAY={wayland}",
-                "-e", f"XDG_RUNTIME_DIR={runtime_dir}",
-                "-e", "HOME=/home/aura-user",
-            ]
-
-            # Mount specific Wayland socket if active
-            wayland_sock = Path(runtime_dir) / wayland
-            if wayland_sock.exists():
-                cmd.extend(["-v", f"{wayland_sock}:{wayland_sock}"])
-
-            # Hardware acceleration / DRI device if available
-            if Path("/dev/dri").exists():
-                cmd.extend(["--device", "/dev/dri:/dev/dri"])
-
-            cmd.extend([
-                "alpine:latest",
-                "tail", "-f", "/dev/null"
-            ])
-
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if proc.returncode != 0:
-                return False, f"Failed to create container: {proc.stderr}"
-
-            _report("Installing baseline GUI libraries (mesa, x11, fonts)...")
-            apk_proc = subprocess.run(["docker", "exec", self.CONTAINER_NAME, "apk", "add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], capture_output=True, text=True, timeout=60)
-            if apk_proc.returncode != 0:
-                return False, f"Failed installing baseline GUI libraries: {apk_proc.stderr or apk_proc.stdout}"
-
-            _report("Container environment configured successfully!")
-            return True, "Container successfully initialized and ready."
-        finally:
             with self._lock:
-                self.is_configuring = False
-                self.configuring_progress_text = ""
+                self.is_configuring = True
+                self.configuring_progress_text = "Initializing Docker environment..."
+
+            try:
+                status = self.get_status(force_refresh=True)
+                if status["status_code"] == "ready":
+                    return True, "Container already configured and active."
+
+                if status["status_code"] == "missing_engine":
+                    if status.get("has_docker") and shutil.which("systemctl"):
+                        _report("Starting Docker background daemon (docker.service)...")
+                        env = os.environ.copy()
+                        if ASKPASS_SCRIPT.exists():
+                            env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
+                        r = subprocess.run(["sudo", "-n", "systemctl", "start", "docker.service"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
+                        if r.returncode != 0:
+                            subprocess.run(["sudo", "-A", "systemctl", "start", "docker.service"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30)
+                        time.sleep(1.2)
+                        status = self.get_status(force_refresh=True)
+
+                    if status["status_code"] == "missing_engine":
+                        return False, "Docker is not installed or daemon is not running."
+
+                if status["status_code"] == "stopped":
+                    _report(f"Starting existing '{self.CONTAINER_NAME}' container...")
+                    proc = subprocess.run(["docker", "start", self.CONTAINER_NAME], capture_output=True, text=True, timeout=10)
+                    if proc.returncode == 0:
+                        subprocess.run(["docker", "update", "--restart", "unless-stopped", self.CONTAINER_NAME], capture_output=True, timeout=5)
+                        _report("Verifying baseline GUI libraries (mesa, x11, fonts)...")
+                        self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], timeout=90)
+                        self.invalidate_cache()
+                        return True, "Started existing aura-box container."
+                    return False, f"Failed to start container: {proc.stderr}"
+
+                _report(f"Initializing '{self.CONTAINER_NAME}' container environment (Alpine Linux)...")
+
+                uid = os.getuid()
+                runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+                display = os.environ.get("DISPLAY", ":0")
+                wayland = os.environ.get("WAYLAND_DISPLAY", "wayland-1")
+
+                app_data_dir = Path.home() / ".local" / "share" / "aura" / "containers"
+                app_data_dir.mkdir(parents=True, exist_ok=True)
+
+                cmd = [
+                    "docker", "run", "-d",
+                    "--name", self.CONTAINER_NAME,
+                    "--restart", "unless-stopped",
+                    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
+                    "-v", f"{app_data_dir}:/home/aura-user/app-data",
+                    "-e", f"DISPLAY={display}",
+                    "-e", f"WAYLAND_DISPLAY={wayland}",
+                    "-e", f"XDG_RUNTIME_DIR={runtime_dir}",
+                    "-e", "HOME=/home/aura-user",
+                ]
+
+                wayland_sock = Path(runtime_dir) / wayland
+                if wayland_sock.exists():
+                    cmd.extend(["-v", f"{wayland_sock}:{wayland_sock}"])
+
+                pulse_sock = Path(runtime_dir) / "pulse" / "native"
+                if pulse_sock.exists():
+                    cmd.extend(["-v", f"{pulse_sock}:{pulse_sock}", "-e", f"PULSE_SERVER=unix:{pulse_sock}"])
+                pipewire_sock = Path(runtime_dir) / "pipewire-0"
+                if pipewire_sock.exists():
+                    cmd.extend(["-v", f"{pipewire_sock}:{pipewire_sock}"])
+
+                if Path("/dev/dri").exists():
+                    cmd.extend(["--device", "/dev/dri:/dev/dri"])
+
+                cmd.extend([
+                    "alpine:latest",
+                    "tail", "-f", "/dev/null"
+                ])
+
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if proc.returncode != 0:
+                    return False, f"Failed to create container: {proc.stderr}"
+
+                _report("Installing baseline GUI libraries (mesa, x11, fonts)...")
+                apk_proc = self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], timeout=90)
+                if apk_proc.returncode != 0:
+                    return False, f"Failed installing baseline GUI libraries: {apk_proc.stderr or apk_proc.stdout}"
+                self.invalidate_cache()
+
+                _report("Container environment configured successfully!")
+                return True, "Container successfully initialized and ready."
+            finally:
+                with self._lock:
+                    self.is_configuring = False
+                    self.configuring_progress_text = ""
 
     def list_apps(self, query: str = "") -> List[Dict[str, Any]]:
         """List container apps: curated + installed shortcuts + Docker Hub search."""
@@ -5716,6 +7136,17 @@ class ContainerManager:
         """Install app inside container and auto-create desktop shortcut."""
         def _task():
             self.active_container_installs.add(app_id)
+            if not hasattr(self, "active_container_progress"):
+                self.active_container_progress = {}
+            self.active_container_progress[app_id.lower()] = (0.15, f"Preparing Docker sandbox for {app_id}...")
+            nonlocal progress_callback
+            orig_prog = progress_callback
+            def _tracked_prog(msg: str):
+                cur_f = self.active_container_progress.get(app_id.lower(), (0.2, ""))[0]
+                self.active_container_progress[app_id.lower()] = (min(0.90, cur_f + 0.25), str(msg))
+                if orig_prog:
+                    orig_prog(msg)
+            progress_callback = _tracked_prog
             try:
                 app_meta = next((a for a in self.CURATED_CONTAINER_APPS if a["id"] == app_id), None)
                 if not app_meta:
@@ -5736,17 +7167,17 @@ class ContainerManager:
                         completion_callback(False, f"Container setup failed: {msg}")
                     return
 
-                # 2. Install inside container
+                # 2. Install inside container using lock-safe _run_apk helper
                 if progress_callback:
                     progress_callback(f"Installing {app_meta['name']} inside '{self.CONTAINER_NAME}'...")
-                
+
                 pkg = app_meta.get("pkg", app_id)
-                cmd = ["docker", "exec", self.CONTAINER_NAME, "apk", "add", "--no-cache", pkg]
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    proc = self._run_apk(["add", "--no-cache", pkg], timeout=300)
                     if proc.returncode != 0:
+                        err_clean = (proc.stderr or proc.stdout or f"apk exited with {proc.returncode}").strip().replace("\n", " ")
                         if completion_callback:
-                            completion_callback(False, f"Installation failed: {proc.stderr}")
+                            completion_callback(False, f"Installation failed: {err_clean}")
                         return
                 except Exception as e:
                     if completion_callback:
@@ -5789,6 +7220,8 @@ X-Aura-AppId={app_id}
                     completion_callback(True, f"Installed {app_meta['name']} with desktop shortcut created!")
             finally:
                 self.active_container_installs.discard(app_id)
+                if hasattr(self, "active_container_progress"):
+                    self.active_container_progress.pop(app_id.lower(), None)
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -5805,8 +7238,7 @@ X-Aura-AppId={app_id}
             status = self.get_status()
             if status["container_exists"] and status["container_running"]:
                 pkg = app_meta.get("pkg", app_id) if app_meta else app_id
-                cmd = ["docker", "exec", self.CONTAINER_NAME, "apk", "del", pkg]
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                proc = self._run_apk(["del", pkg], timeout=60)
                 if proc.returncode != 0:
                     if completion_callback:
                         completion_callback(False, f"Failed removing package from container: {proc.stderr or proc.stdout}")
@@ -5853,10 +7285,7 @@ X-Aura-AppId={app_id}
             return updates
 
         try:
-            proc = subprocess.run(
-                ["docker", "exec", self.CONTAINER_NAME, "apk", "version", "-l", "<"],
-                capture_output=True, text=True, timeout=10
-            )
+            proc = self._run_apk(["version", "-l", "<"], timeout=15)
             if proc.returncode == 0:
                 for line in proc.stdout.splitlines():
                     line = line.strip()
@@ -5864,8 +7293,15 @@ X-Aura-AppId={app_id}
                     if len(parts) == 2:
                         old_str = parts[0].strip()
                         new_str = parts[1].strip()
+                        if old_str.lower().startswith("installed"):
+                            continue
+                        # Extract clean package name from Alpine '<pkgname>-<ver>-r<rel>'
+                        m_pkg = re.match(r'^([a-zA-Z0-9_+-]+?)-([0-9][^-]*-r[0-9]+)$', old_str)
+                        pkg_clean = m_pkg.group(1) if m_pkg else old_str
+                        old_ver_clean = m_pkg.group(2) if m_pkg else old_str
                         updates.append({
                             "name": old_str,
+                            "pkg_name": pkg_clean,
                             "current_version": old_str,
                             "new_version": new_str,
                             "type": "container",
@@ -5873,7 +7309,7 @@ X-Aura-AppId={app_id}
                             "old_ver": old_str,
                             "new_ver": new_str,
                             "source": "docker",
-                            "icon": "application-x-executable",
+                            "icon": resolve_icon_name(pkg_clean),
                         })
         except Exception:
             pass
@@ -5910,12 +7346,11 @@ X-Aura-AppId={app_id}
                 if progress_callback:
                     progress_callback(f"Updating {name} in '{self.CONTAINER_NAME}'...")
 
-                cmd = ["docker", "exec", self.CONTAINER_NAME, "apk", "add", "--upgrade", "--no-cache", pkg]
                 try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                    proc = self._run_apk(["add", "--upgrade", "--no-cache", pkg], timeout=300)
                     if proc.returncode != 0:
                         if completion_callback:
-                            completion_callback(False, f"Update failed: {proc.stderr}")
+                            completion_callback(False, f"Update failed: {proc.stderr or proc.stdout}")
                         return
                 except Exception as e:
                     if completion_callback:
@@ -6151,7 +7586,18 @@ class CacheManager:
         }
 
     def prune_cache(self, category: str, safe_mode: bool = True, progress_cb=None, complete_cb=None):
-        """Prune specific cache category in background thread."""
+        """
+        Prune specific cache category in background thread.
+        Concurrency-hardened:
+        - Serialized per-category so rapid clicks never collide.
+        - 'pacman': uses paccache -rk1 (recognizing 'no candidate packages found' exit code 1 as success),
+          or acquires GLOBAL_ALPM_LOCK before running pacman -Sc so active installs are never disrupted.
+        - 'aur': skips any build directory actively being compiled by paru/yay/makepkg.
+        - 'docker': prunes dangling images & build cache WITHOUT deleting a stopped aura-box container!
+        """
+        if not hasattr(self, "_prune_lock"):
+            self._prune_lock = threading.RLock()
+
         def _task():
             env = os.environ.copy()
             askpass_script = get_askpass_script()
@@ -6162,62 +7608,85 @@ class CacheManager:
             success = True
             msg = "Cleaned."
 
-            try:
-                if category == "pacman":
-                    if progress_cb:
-                        progress_cb(0.3, "Pruning pacman package archives...")
-                    if shutil.which("paccache") and safe_mode:
-                        res = subprocess.run(["sudo", "-A", "paccache", "-rk1"], capture_output=True, text=True, env=env, timeout=120)
-                    else:
-                        res = subprocess.run(["sudo", "-A", "pacman", "-Sc", "--noconfirm"], capture_output=True, text=True, env=env, timeout=120)
-                    success = (res.returncode == 0)
-                    msg = "Pacman package cache safely pruned (latest versions kept)." if success else (res.stderr or "Prune failed")
-                elif category == "aur":
-                    if progress_cb:
-                        progress_cb(0.3, "Clearing AUR build repositories...")
-                    for path in (self.PARU_CACHE_DIR, self.YAY_CACHE_DIR):
-                        if path.exists():
-                            for child in path.iterdir():
-                                try:
-                                    if child.is_dir():
-                                        shutil.rmtree(child, ignore_errors=True)
-                                    else:
-                                        child.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                    msg = "AUR build artifacts and git trees purged."
-                elif category == "docker":
-                    if progress_cb:
-                        progress_cb(0.3, "Pruning unused Docker system objects...")
-                    if shutil.which("docker"):
-                        cmd = ["docker", "system", "prune", "-f"] if safe_mode else ["docker", "system", "prune", "-a", "-f"]
-                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            with self._prune_lock:
+                try:
+                    if category == "pacman":
+                        if progress_cb:
+                            progress_cb(0.3, "Pruning pacman package archives...")
+                        if shutil.which("paccache") and safe_mode:
+                            res = subprocess.run(["sudo", "-n", "paccache", "-rk1"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=30)
+                            out_comb = ((res.stdout or "") + "\n" + (res.stderr or "")).lower()
+                            if res.returncode != 0 and "no candidate packages found" not in out_comb and ("password is required" in out_comb or "authentication" in out_comb or not out_comb.strip()):
+                                res = subprocess.run(["sudo", "-A", "paccache", "-rk1"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=120)
+                                out_comb = ((res.stdout or "") + "\n" + (res.stderr or "")).lower()
+                            success = (res.returncode == 0 or "no candidate packages found" in out_comb)
+                        else:
+                            with GLOBAL_ALPM_LOCK:
+                                wait_for_alpm_lock(progress_cb=progress_cb, max_wait=120, env=env)
+                                res = subprocess.run(["sudo", "-n", "pacman", "-Sc", "--noconfirm"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60)
+                                if res.returncode != 0:
+                                    res = subprocess.run(["sudo", "-A", "pacman", "-Sc", "--noconfirm"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=120)
+                                success = (res.returncode == 0)
+                        msg = "Pacman package cache safely pruned (latest versions kept)." if success else ((res.stderr or res.stdout or "Prune failed").strip()[:90])
+                    elif category == "aur":
+                        if progress_cb:
+                            progress_cb(0.3, "Clearing AUR build repositories...")
+                        aur_building = False
+                        for bp in ("paru", "yay", "makepkg"):
+                            try:
+                                if subprocess.run(["pgrep", "-x", bp], capture_output=True, timeout=2).returncode == 0:
+                                    aur_building = True
+                                    break
+                            except Exception:
+                                pass
+                        now_ts = time.time()
+                        for path in (self.PARU_CACHE_DIR, self.YAY_CACHE_DIR):
+                            if path.exists():
+                                for child in path.iterdir():
+                                    try:
+                                        if aur_building and (now_ts - child.stat().st_mtime) < 300:
+                                            continue
+                                        if child.is_dir():
+                                            shutil.rmtree(child, ignore_errors=True)
+                                        else:
+                                            child.unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                        msg = "AUR build artifacts and git trees purged."
+                    elif category == "docker":
+                        if progress_cb:
+                            progress_cb(0.3, "Pruning unused Docker images & build cache...")
+                        if shutil.which("docker"):
+                            res = subprocess.run(["docker", "image", "prune", "-f"], capture_output=True, text=True, timeout=60)
+                            subprocess.run(["docker", "builder", "prune", "-f"], capture_output=True, text=True, timeout=60)
+                            success = (res.returncode == 0)
+                            msg = "Docker dangling images and build cache pruned safely." if success else (res.stderr or "Docker prune failed")
+                        else:
+                            msg = "Docker is not installed."
+                    elif category == "journal":
+                        if progress_cb:
+                            progress_cb(0.3, "Vacuuming systemd journal archives...")
+                        res = subprocess.run(["sudo", "-n", "journalctl", "--vacuum-time=7d"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=30)
+                        if res.returncode != 0:
+                            res = subprocess.run(["sudo", "-A", "journalctl", "--vacuum-time=7d"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60)
                         success = (res.returncode == 0)
-                        msg = "Docker unused layers and containers pruned." if success else (res.stderr or "Docker prune failed")
+                        msg = "Systemd journals vacuumed to last 7 days." if success else (res.stderr or "Journal vacuum failed")
+                    elif category == "aura":
+                        if progress_cb:
+                            progress_cb(0.3, "Purging Aura sync index cache...")
+                        for p in (CACHE_FILE, UPDATES_CACHE_FILE):
+                            try:
+                                if p.exists():
+                                    p.unlink()
+                            except Exception:
+                                pass
+                        msg = "Aura local database cache cleared."
                     else:
-                        msg = "Docker is not installed."
-                elif category == "journal":
-                    if progress_cb:
-                        progress_cb(0.3, "Vacuuming systemd journal archives...")
-                    res = subprocess.run(["sudo", "-A", "journalctl", "--vacuum-time=7d"], capture_output=True, text=True, env=env, timeout=60)
-                    success = (res.returncode == 0)
-                    msg = "Systemd journals vacuumed to last 7 days." if success else (res.stderr or "Journal vacuum failed")
-                elif category == "aura":
-                    if progress_cb:
-                        progress_cb(0.3, "Purging Aura sync index cache...")
-                    for p in (CACHE_FILE, UPDATES_CACHE_FILE):
-                        try:
-                            if p.exists():
-                                p.unlink()
-                        except Exception:
-                            pass
-                    msg = "Aura local database cache cleared."
-                else:
+                        success = False
+                        msg = f"Unknown cache category: {category}"
+                except Exception as e:
                     success = False
-                    msg = f"Unknown cache category: {category}"
-            except Exception as e:
-                success = False
-                msg = str(e)
+                    msg = str(e)
 
             if progress_cb:
                 progress_cb(1.0, msg)
@@ -6262,3 +7731,1602 @@ class CacheManager:
 
         threading.Thread(target=_task, daemon=True).start()
 
+class DebPackageManager:
+    """
+    Seamless Debian (.deb) Package Inspector, Dependency Translator & Native Arch Installer.
+    Tailored for Arch Linux & Hyprland:
+    - Pure-Python + bsdtar/ar inspection of .deb archives (supports gz, xz, zst, bz2 control & data tarballs)
+    - 175+ Debian-to-Arch Linux package dependency mappings with live pacman sync DB verification
+    - Automatic FHS normalization (/bin, /sbin -> /usr/bin; /lib, /lib64 -> /usr/lib) to prevent Arch filesystem conflicts
+    - Automatic Hyprland Wayland Ozone flag injection for Electron/Chromium .deb applications
+    - Native .pkg.tar.zst / .pkg.tar.xz generation and atomic installation via 'sudo pacman -U'
+    - Optional debtap integration when debtap is installed and initialized
+    - Direct HTTP/HTTPS .deb URL downloader and ~/Downloads local .deb scanner
+    """
+
+    DEB_CACHE_DIR = CACHE_DIR / "deb"
+    DEB_ICONS_DIR = CACHE_DIR / "deb_icons"
+    DEB_DOWNLOADS_DIR = CACHE_DIR / "deb_downloads"
+    INSTALLED_DEBS_FILE = DATA_DIR / "installed_debs.json"
+
+    # Comprehensive Debian/Ubuntu -> Arch Linux dependency translation table
+    DEB_TO_ARCH_MAP: Dict[str, Optional[str]] = {
+        "libc6": "glibc",
+        "libc-bin": "glibc",
+        "libgcc-s1": "gcc-libs",
+        "libgcc1": "gcc-libs",
+        "libstdc++6": "gcc-libs",
+        "zlib1g": "zlib",
+        "libglib2.0-0": "glib2",
+        "libglib2.0-0t64": "glib2",
+        "libgtk-3-0": "gtk3",
+        "libgtk-3-0t64": "gtk3",
+        "libgtk-4-1": "gtk4",
+        "libgdk-pixbuf-2.0-0": "gdk-pixbuf2",
+        "libgdk-pixbuf2.0-0": "gdk-pixbuf2",
+        "libpango-1.0-0": "pango",
+        "libpangocairo-1.0-0": "pango",
+        "libpangoft2-1.0-0": "pango",
+        "libcairo2": "cairo",
+        "libcairo-gobject2": "cairo",
+        "libatk1.0-0": "at-spi2-core",
+        "libatk1.0-0t64": "at-spi2-core",
+        "libatk-bridge2.0-0": "at-spi2-core",
+        "libatk-bridge2.0-0t64": "at-spi2-core",
+        "libatspi2.0-0": "at-spi2-core",
+        "libatspi2.0-0t64": "at-spi2-core",
+        "libasound2": "alsa-lib",
+        "libasound2t64": "alsa-lib",
+        "libpulse0": "libpulse",
+        "libpipewire-0.3-0": "pipewire",
+        "libpipewire-0.3-0t64": "pipewire",
+        "libnss3": "nss",
+        "libnspr4": "nspr",
+        "libxss1": "libxss",
+        "libxtst6": "libxtst",
+        "libx11-6": "libx11",
+        "libx11-xcb1": "libx11",
+        "libxcb1": "libxcb",
+        "libxcb-dri3-0": "libxcb",
+        "libxcb-shm0": "libxcb",
+        "libxcb-xfixes0": "libxcb",
+        "libxcb-randr0": "libxcb",
+        "libxcb-image0": "xcb-util-image",
+        "libxcb-keysyms1": "xcb-util-keysyms",
+        "libxcb-render-util0": "xcb-util-renderutil",
+        "libxcb-util1": "xcb-util",
+        "libxcb-wm4": "xcb-util-wm",
+        "libxcb-icccm4": "xcb-util-wm",
+        "libxcb-cursor0": "xcb-util-cursor",
+        "libxcomposite1": "libxcomposite",
+        "libxcursor1": "libxcursor",
+        "libxdamage1": "libxdamage",
+        "libxext6": "libxext",
+        "libxfixes3": "libxfixes",
+        "libxi6": "libxi",
+        "libxinerama1": "libxinerama",
+        "libxrandr2": "libxrandr",
+        "libxrender1": "libxrender",
+        "libxshmfence1": "libxshmfence",
+        "libxxf86vm1": "libxxf86vm",
+        "libxkbcommon0": "libxkbcommon",
+        "libxkbcommon-x11-0": "libxkbcommon-x11",
+        "libxkbfile1": "libxkbfile",
+        "libwayland-client0": "wayland",
+        "libwayland-cursor0": "wayland",
+        "libwayland-egl1": "wayland",
+        "libwayland-server0": "wayland",
+        "libgbm1": "mesa",
+        "libgl1": "libglvnd",
+        "libgl1-mesa-glx": "mesa",
+        "libgl1-mesa-dri": "mesa",
+        "libegl1": "libglvnd",
+        "libegl1-mesa": "mesa",
+        "libgles2": "libglvnd",
+        "libdrm2": "libdrm",
+        "libvulkan1": "vulkan-icd-loader",
+        "libcups2": "cups",
+        "libcups2t64": "cups",
+        "libdbus-1-3": "dbus",
+        "libdbus-glib-1-2": "dbus-glib",
+        "libexpat1": "expat",
+        "libfontconfig1": "fontconfig",
+        "libfreetype6": "freetype2",
+        "libharfbuzz0b": "harfbuzz",
+        "libfribidi0": "fribidi",
+        "libnotify4": "libnotify",
+        "libsecret-1-0": "libsecret",
+        "libayatana-appindicator3-1": "libayatana-appindicator",
+        "libayatana-ido3-0.4-0": "ayatana-ido",
+        "libappindicator3-1": "libappindicator-gtk3",
+        "libappindicator1": "libappindicator-gtk3",
+        "libindicator3-7": "libindicator-gtk3",
+        "libdbusmenu-glib4": "libdbusmenu-glib",
+        "libdbusmenu-gtk3-4": "libdbusmenu-gtk3",
+        "libcurl4": "curl",
+        "libcurl4t64": "curl",
+        "libcurl3-gnutls": "libcurl-gnutls",
+        "libcurl3-nss": "curl",
+        "libssl3": "openssl",
+        "libssl3t64": "openssl",
+        "libssl1.1": "openssl-1.1",
+        "libcrypto++8": "crypto++",
+        "libgcrypt20": "libgcrypt",
+        "libgpg-error0": "libgpg-error",
+        "libgnutls30": "gnutls",
+        "libgnutls30t64": "gnutls",
+        "libkrb5-3": "krb5",
+        "libgssapi-krb5-2": "krb5",
+        "libsqlite3-0": "sqlite",
+        "libxml2": "libxml2",
+        "libxslt1.1": "libxslt",
+        "libudev1": "systemd-libs",
+        "libsystemd0": "systemd-libs",
+        "liblzma5": "xz",
+        "libzstd1": "zstd",
+        "libbz2-1.0": "bzip2",
+        "liblz4-1": "lz4",
+        "libarchive13": "libarchive",
+        "libarchive13t64": "libarchive",
+        "libfuse2": "fuse2",
+        "libfuse2t64": "fuse2",
+        "libfuse3-3": "fuse3",
+        "libwebkit2gtk-4.0-37": "webkit2gtk",
+        "libwebkit2gtk-4.1-0": "webkit2gtk-4.1",
+        "libjavascriptcoregtk-4.0-18": "webkit2gtk",
+        "libjavascriptcoregtk-4.1-0": "webkit2gtk-4.1",
+        "libsoup2.4-1": "libsoup",
+        "libsoup-3.0-0": "libsoup3",
+        "libflac8": "flac",
+        "libflac12t64": "flac",
+        "libogg0": "libogg",
+        "libvorbis0a": "libvorbis",
+        "libvorbisenc2": "libvorbis",
+        "libopus0": "opus",
+        "libsndfile1": "libsndfile",
+        "libmp3lame0": "lame",
+        "libmpg123-0": "mpg123",
+        "libmpg123-0t64": "mpg123",
+        "libopenal1": "openal",
+        "libsdl2-2.0-0": "sdl2",
+        "libva2": "libva",
+        "libva-drm2": "libva",
+        "libva-x11-2": "libva",
+        "libvdpau1": "libvdpau",
+        "libjpeg62-turbo": "libjpeg-turbo",
+        "libjpeg8": "libjpeg-turbo",
+        "libpng16-16": "libpng",
+        "libpng16-16t64": "libpng",
+        "libwebp7": "libwebp",
+        "libwebp6": "libwebp",
+        "libtiff5": "libtiff",
+        "libtiff6": "libtiff",
+        "libqt5core5a": "qt5-base",
+        "libqt5gui5": "qt5-base",
+        "libqt5widgets5": "qt5-base",
+        "libqt5network5": "qt5-base",
+        "libqt5dbus5": "qt5-base",
+        "libqt5svg5": "qt5-svg",
+        "libqt5x11extras5": "qt5-x11extras",
+        "libqt5waylandclient5": "qt5-wayland",
+        "libqt6core6": "qt6-base",
+        "libqt6core6t64": "qt6-base",
+        "libqt6gui6": "qt6-base",
+        "libqt6widgets6": "qt6-base",
+        "libqt6waylandclient6": "qt6-wayland",
+        "xdg-utils": "xdg-utils",
+        "desktop-file-utils": "desktop-file-utils",
+        "shared-mime-info": "shared-mime-info",
+        "hicolor-icon-theme": "hicolor-icon-theme",
+        "ca-certificates": "ca-certificates",
+        "fonts-liberation": "ttf-liberation",
+        "fonts-noto-color-emoji": "noto-fonts-emoji",
+        "libnss-mdns": "nss-mdns",
+        "libcap2": "libcap",
+        "libattr1": "attr",
+        "libacl1": "acl",
+        "libuuid1": "util-linux-libs",
+        "libblkid1": "util-linux-libs",
+        "libmount1": "util-linux-libs",
+        "libncurses6": "ncurses",
+        "libncursesw6": "ncurses",
+        "libtinfo6": "ncurses",
+        "libreadline8": "readline",
+        "libreadline8t64": "readline",
+        "libffi8": "libffi",
+        "libffi7": "libffi",
+        "libpcre3": "pcre",
+        "libpcre2-8-0": "pcre2",
+        "python3": "python",
+        "bash": "bash",
+        "tar": "tar",
+        "gzip": "gzip",
+        "xz-utils": "xz",
+        "zstd": "zstd",
+        "curl": "curl",
+        "wget": "wget",
+        "git": "git",
+        "gnupg": "gnupg",
+        "lsb-release": "lsb-release",
+        "apt": None,
+        "dpkg": None,
+        "debconf": None,
+        "ucf": None,
+        "init-system-helpers": None,
+        "adduser": None,
+        "multiarch-support": None,
+        "gconf-service": None,
+        "gconf2": None,
+    }
+
+    def __init__(self, pm: Optional["PackageManager"] = None):
+        self.pm = pm
+        self._lock = threading.Lock()
+        for _d in (self.DEB_CACHE_DIR, self.DEB_ICONS_DIR, self.DEB_DOWNLOADS_DIR, self.INSTALLED_DEBS_FILE.parent):
+            try:
+                _d.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+        self._inspect_cache: Dict[str, Dict[str, Any]] = {}
+        self.active_deb_installs: Dict[str, Tuple[float, str]] = {}
+
+    @staticmethod
+    def _iter_ar_members(deb_path: Path):
+        """
+        Pure-Python 'ar' archive parser for .deb files.
+        Yields (member_name, raw_bytes) without requiring binutils 'ar'.
+        """
+        with open(deb_path, "rb") as f:
+            magic = f.read(8)
+            if magic != b"!<arch>\n":
+                raise ValueError(f"Not a valid .deb (ar) archive: {deb_path.name}")
+            gnu_longnames = b""
+            while True:
+                hdr = f.read(60)
+                if not hdr or len(hdr) < 60:
+                    break
+                raw_name = hdr[0:16].decode("ascii", errors="replace").strip()
+                size_str = hdr[48:58].decode("ascii", errors="replace").strip()
+                try:
+                    size = int(size_str)
+                except ValueError:
+                    break
+
+                # BSD extended filename (#1/<len>)
+                if raw_name.startswith("#1/"):
+                    ext_len = int(raw_name[3:])
+                    name = f.read(ext_len).decode("utf-8", errors="replace").rstrip("\x00")
+                    data = f.read(size - ext_len)
+                else:
+                    data = f.read(size)
+                    if raw_name == "//":
+                        gnu_longnames = data
+                        if size % 2 == 1:
+                            f.read(1)
+                        continue
+                    elif raw_name.startswith("/") and raw_name[1:].isdigit() and gnu_longnames:
+                        offset = int(raw_name[1:])
+                        end_idx = gnu_longnames.find(b"/", offset)
+                        if end_idx == -1:
+                            end_idx = gnu_longnames.find(b"\n", offset)
+                        name = gnu_longnames[offset:end_idx].decode("utf-8", errors="replace")
+                    else:
+                        name = raw_name.rstrip("/")
+
+                if size % 2 == 1:
+                    f.read(1)
+                yield name, data
+
+    @staticmethod
+    def _open_tar_bytes(member_name: str, data: bytes) -> tarfile.TarFile:
+        """Open a tar archive from bytes supporting .gz, .xz, .bz2, .zst, or uncompressed."""
+        lower = member_name.lower()
+        if lower.endswith(".zst") or lower.endswith(".zstd"):
+            # Decompress zstd stream via zstd CLI or python zstandard if available
+            try:
+                import zstandard as zstd
+                dctx = zstd.ZstdDecompressor()
+                decompressed = dctx.decompress(data, max_output_size=512 * 1024 * 1024)
+                return tarfile.open(fileobj=io.BytesIO(decompressed), mode="r:")
+            except Exception:
+                if shutil.which("zstd"):
+                    proc = subprocess.run(["zstd", "-dc"], input=data, capture_output=True, timeout=60)
+                    if proc.returncode == 0:
+                        return tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:")
+                raise RuntimeError("zstd decompression required for this .deb archive (install 'zstd' package).")
+        return tarfile.open(fileobj=io.BytesIO(data), mode="r:*")
+
+    @staticmethod
+    def _parse_control_text(text: str) -> Dict[str, str]:
+        """Parse Debian RFC822 control file into a dictionary."""
+        fields: Dict[str, str] = {}
+        current_key: Optional[str] = None
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            if line.startswith((" ", "\t")) and current_key:
+                val = line.strip()
+                if val == ".":
+                    fields[current_key] += "\n"
+                else:
+                    fields[current_key] += "\n" + val
+            elif ":" in line:
+                k, v = line.split(":", 1)
+                current_key = k.strip().lower()
+                fields[current_key] = v.strip()
+        return fields
+
+    @staticmethod
+    def _sanitize_arch_pkgname(deb_name: str) -> str:
+        """Sanitize Debian package name into valid Arch Linux package name."""
+        clean = re.sub(r'[^a-z0-9@._+-]', '-', deb_name.strip().lower())
+        clean = re.sub(r'-+', '-', clean).strip('-')
+        return clean or "deb-package"
+
+    @staticmethod
+    def _sanitize_arch_version(deb_ver: str) -> str:
+        """Sanitize Debian version string into valid Arch Linux pkgver."""
+        ver = deb_ver.strip()
+        # Strip Debian epoch if present (e.g. 1:1.85.0-1 -> 1.85.0_1)
+        if ":" in ver:
+            ver = ver.split(":", 1)[1]
+        ver = ver.replace("-", "_").replace("~", ".").replace("+", ".")
+        ver = re.sub(r'[^a-zA-Z0-9._]', '', ver)
+        ver = re.sub(r'\.+', '.', ver).strip('._')
+        if not ver or not ver[0].isalnum():
+            ver = "1.0.0"
+        return ver
+
+    def translate_deb_dependencies(self, raw_depends: str) -> Dict[str, List[str]]:
+        """
+        Translate Debian Depends string into Arch Linux dependencies.
+        Returns dict with keys:
+        - 'arch_depends': All valid mapped Arch package names
+        - 'installed': Already installed on system
+        - 'missing_repo': Available in official pacman repos, to be installed automatically
+        - 'missing_aur': Not in official repos (may be in AUR)
+        - 'ignored': Debian-specific virtual/unmapped packages safely skipped
+        """
+        arch_deps: List[str] = []
+        installed: List[str] = []
+        missing_repo: List[str] = []
+        missing_aur: List[str] = []
+        ignored: List[str] = []
+
+        if not raw_depends:
+            return {
+                "arch_depends": arch_deps,
+                "installed": installed,
+                "missing_repo": missing_repo,
+                "missing_aur": missing_aur,
+                "ignored": ignored,
+            }
+
+        seen = set()
+        for group in raw_depends.split(","):
+            group = group.strip()
+            if not group:
+                continue
+            # Handle OR-dependencies: e.g. "libappindicator3-1 | libayatana-appindicator3-1"
+            alternatives = [alt.strip() for alt in group.split("|") if alt.strip()]
+            mapped_choice = None
+            for alt in alternatives:
+                # Strip version constraints e.g. (>= 2.34) and arch qualifiers e.g. :amd64
+                deb_pkg = re.split(r'[\s\(:]', alt, maxsplit=1)[0].strip().lower()
+                if not deb_pkg:
+                    continue
+                if deb_pkg in self.DEB_TO_ARCH_MAP:
+                    cand = self.DEB_TO_ARCH_MAP[deb_pkg]
+                    if cand is None:
+                        # Explicitly ignored Debian-only utility
+                        mapped_choice = "__IGNORE__"
+                        break
+                    mapped_choice = cand
+                    if self.pm and self.pm.is_installed(cand):
+                        break
+                else:
+                    # Try heuristic: if exact name exists in Arch repos/installed
+                    if self.pm and (self.pm.is_installed(deb_pkg) or deb_pkg in self.pm.packages):
+                        mapped_choice = deb_pkg
+                        break
+                    # Strip trailing Debian soname numbers e.g. libfoo1 -> libfoo
+                    stripped = re.sub(r'[0-9]+(t64)?$', '', deb_pkg)
+                    if stripped and self.pm and (self.pm.is_installed(stripped) or stripped in self.pm.packages):
+                        mapped_choice = stripped
+                        break
+
+            if mapped_choice == "__IGNORE__":
+                continue
+            if mapped_choice:
+                if mapped_choice not in seen:
+                    seen.add(mapped_choice)
+                    arch_deps.append(mapped_choice)
+                    if self.pm and self.pm.is_installed(mapped_choice):
+                        installed.append(mapped_choice)
+                    elif self.pm and mapped_choice in self.pm.packages:
+                        missing_repo.append(mapped_choice)
+                    else:
+                        # Check via pacman -Q / pacman -Si if pm.packages isn't loaded yet
+                        if self.pm and not self.pm.is_loaded:
+                            missing_repo.append(mapped_choice)
+                        else:
+                            missing_aur.append(mapped_choice)
+            else:
+                first_deb = re.split(r'[\s\(:]', alternatives[0], maxsplit=1)[0].strip().lower()
+                if first_deb and first_deb not in ignored:
+                    ignored.append(first_deb)
+
+        return {
+            "arch_depends": arch_deps,
+            "installed": installed,
+            "missing_repo": missing_repo,
+            "missing_aur": missing_aur,
+            "ignored": ignored,
+        }
+
+    def inspect_deb(self, deb_path: str) -> Dict[str, Any]:
+        """
+        Inspect a local .deb file and return rich metadata, translated Arch dependencies,
+        extracted icon path, desktop entry metadata, and Hyprland/Electron compatibility flags.
+        """
+        p = Path(os.path.expanduser(deb_path)).resolve()
+        if not p.exists() or not p.is_file():
+            raise FileNotFoundError(f".deb file not found: {deb_path}")
+
+        cache_key = f"{p}:{p.stat().st_mtime}:{p.stat().st_size}"
+        if cache_key in self._inspect_cache:
+            cached = dict(self._inspect_cache[cache_key])
+            if self.pm:
+                cached["is_installed"] = self.pm.is_installed(cached["name"])
+                cached["installed_version"] = self.pm.installed_versions.get(cached["name"], "")
+            return cached
+
+        control_fields: Dict[str, str] = {}
+        desktop_info: Dict[str, str] = {}
+        extracted_icon_path: str = ""
+        is_electron = False
+        file_count = 0
+        sample_files: List[str] = []
+
+        for member_name, member_bytes in self._iter_ar_members(p):
+            if member_name.startswith("control.tar"):
+                with self._open_tar_bytes(member_name, member_bytes) as ctar:
+                    for m in ctar.getmembers():
+                        if m.name.endswith("control") and m.isfile():
+                            f = ctar.extractfile(m)
+                            if f:
+                                control_fields = self._parse_control_text(f.read().decode("utf-8", errors="replace"))
+                            break
+            elif member_name.startswith("data.tar"):
+                try:
+                    with self._open_tar_bytes(member_name, member_bytes) as dtar:
+                        members = dtar.getmembers()
+                        file_count = len(members)
+                        best_icon_member = None
+                        best_icon_score = -1
+
+                        for m in members:
+                            mname = m.name.lstrip("./")
+                            if len(sample_files) < 25 and m.isfile():
+                                sample_files.append("/" + mname)
+
+                            if any(x in mname.lower() for x in ("chrome-sandbox", "app.asar", "libffmpeg.so", "electron")):
+                                is_electron = True
+
+                            if mname.endswith(".desktop") and ("applications/" in mname) and m.isfile() and not desktop_info:
+                                f = dtar.extractfile(m)
+                                if f:
+                                    d_txt = f.read().decode("utf-8", errors="replace")
+                                    for line in d_txt.splitlines():
+                                        if line.startswith("Name=") and "name" not in desktop_info:
+                                            desktop_info["name"] = line.split("=", 1)[1].strip()
+                                        elif line.startswith("Comment=") and "comment" not in desktop_info:
+                                            desktop_info["comment"] = line.split("=", 1)[1].strip()
+                                        elif line.startswith("Icon=") and "icon" not in desktop_info:
+                                            desktop_info["icon"] = line.split("=", 1)[1].strip()
+                                        elif line.startswith("Exec=") and "exec" not in desktop_info:
+                                            desktop_info["exec"] = line.split("=", 1)[1].strip()
+
+                            # Score candidate icons (.svg or 128/256/512 .png)
+                            if m.isfile() and mname.lower().endswith((".svg", ".png")) and ("icons/" in mname or "pixmaps/" in mname or mname.startswith("opt/")):
+                                score = 10
+                                if mname.lower().endswith(".svg"):
+                                    score = 100
+                                elif "512" in mname or "256" in mname:
+                                    score = 90
+                                elif "128" in mname or "64" in mname:
+                                    score = 75
+                                elif "pixmaps/" in mname:
+                                    score = 60
+                                if score > best_icon_score:
+                                    best_icon_score = score
+                                    best_icon_member = m
+
+                        if best_icon_member is not None:
+                            try:
+                                f_ico = dtar.extractfile(best_icon_member)
+                                if f_ico:
+                                    raw_pkg = self._sanitize_arch_pkgname(control_fields.get("package", p.stem))
+                                    ext = ".svg" if best_icon_member.name.lower().endswith(".svg") else ".png"
+                                    out_ico = self.DEB_ICONS_DIR / f"{raw_pkg}{ext}"
+                                    out_ico.write_bytes(f_ico.read())
+                                    extracted_icon_path = str(out_ico)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+        deb_pkgname = control_fields.get("package", p.stem)
+        arch_pkgname = self._sanitize_arch_pkgname(deb_pkgname)
+        deb_ver = control_fields.get("version", "1.0.0")
+        arch_ver = self._sanitize_arch_version(deb_ver)
+        deb_arch = control_fields.get("architecture", "amd64").strip().lower()
+        arch_map = {"amd64": "x86_64", "all": "any", "i386": "i686", "arm64": "aarch64"}
+        arch_cpu = arch_map.get(deb_arch, "x86_64")
+
+        raw_desc = control_fields.get("description", "")
+        desc_lines = [l.strip() for l in raw_desc.splitlines() if l.strip()]
+        short_desc = desc_lines[0] if desc_lines else (desktop_info.get("comment") or f"Debian package ({p.name})")
+        long_desc = "\n".join(desc_lines[1:]) if len(desc_lines) > 1 else short_desc
+
+        raw_deps = control_fields.get("depends", "")
+        if control_fields.get("pre-depends"):
+            raw_deps = f"{raw_deps}, {control_fields['pre-depends']}" if raw_deps else control_fields["pre-depends"]
+        dep_report = self.translate_deb_dependencies(raw_deps)
+
+        # Installed-Size in Debian control is in KiB
+        inst_kb_str = control_fields.get("installed-size", "0")
+        try:
+            inst_bytes = int(re.sub(r'[^0-9]', '', inst_kb_str) or "0") * 1024
+        except ValueError:
+            inst_bytes = p.stat().st_size * 3
+        csize_bytes = p.stat().st_size
+
+        display_name = desktop_info.get("name") or get_app_display_name(arch_pkgname)
+        icon = extracted_icon_path or desktop_info.get("icon") or resolve_icon_name(arch_pkgname, short_desc)
+        is_inst = self.pm.is_installed(arch_pkgname) if self.pm else False
+        inst_ver = self.pm.installed_versions.get(arch_pkgname, "") if self.pm else ""
+
+        info = {
+            "name": arch_pkgname,
+            "deb_package": deb_pkgname,
+            "display_name": display_name,
+            "title": display_name,
+            "version": arch_ver,
+            "deb_version": deb_ver,
+            "arch": arch_cpu,
+            "deb_arch": deb_arch,
+            "desc": short_desc,
+            "extended_desc": long_desc,
+            "url": control_fields.get("homepage", ""),
+            "maintainer": sanitize_str(control_fields.get("maintainer", "Debian Package Maintainer")),
+            "packager": sanitize_str(control_fields.get("maintainer", "Aura Deb Bridge")),
+            "license": control_fields.get("license", "Proprietary / Debian Package"),
+            "section": control_fields.get("section", "utils"),
+            "csize": csize_bytes,
+            "isize": inst_bytes,
+            "csize_str": format_bytes(csize_bytes),
+            "isize_str": format_bytes(inst_bytes),
+            "depends": dep_report["arch_depends"],
+            "dep_report": dep_report,
+            "raw_deb_depends": raw_deps,
+            "icon": icon,
+            "is_electron": is_electron,
+            "file_count": file_count,
+            "sample_files": sample_files,
+            "deb_path": str(p),
+            "deb_filename": p.name,
+            "source": "deb",
+            "repo": "deb-local",
+            "is_installed": is_inst,
+            "installed_version": inst_ver,
+        }
+        self._inspect_cache[cache_key] = dict(info)
+        return info
+
+    def get_deb_detail(self, name_or_path: str) -> Dict[str, Any]:
+        """Return full detail dictionary for either a .deb file path or an installed .deb package name."""
+        cand_path = Path(os.path.expanduser(name_or_path))
+        if cand_path.exists() and cand_path.is_file():
+            return self.inspect_deb(str(cand_path))
+        # Check installed_debs registry
+        reg = self._load_registry()
+        clean = name_or_path.strip().lower()
+        if clean in reg:
+            saved = dict(reg[clean])
+            deb_p = saved.get("deb_path", "")
+            if deb_p and Path(deb_p).exists():
+                try:
+                    return self.inspect_deb(deb_p)
+                except Exception:
+                    pass
+            saved["is_installed"] = self.pm.is_installed(clean) if self.pm else True
+            saved["source"] = "deb"
+            return saved
+        # Fallback to local pacman info
+        if self.pm and clean in self.pm.packages:
+            d = dict(self.pm.packages[clean])
+            d["source"] = "deb"
+            d["is_installed"] = self.pm.is_installed(clean)
+            d["display_name"] = get_app_display_name(clean)
+            return d
+        return {
+            "name": clean,
+            "display_name": get_app_display_name(clean),
+            "version": "1.0.0",
+            "desc": "Converted Debian (.deb) package",
+            "source": "deb",
+            "repo": "deb-local",
+            "is_installed": self.pm.is_installed(clean) if self.pm else False,
+            "icon": resolve_icon_name(clean),
+        }
+
+    def _load_registry(self) -> Dict[str, Dict[str, Any]]:
+        if self.INSTALLED_DEBS_FILE.exists():
+            try:
+                data = json.loads(self.INSTALLED_DEBS_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        return {}
+
+    def _save_registry(self, reg: Dict[str, Dict[str, Any]]):
+        try:
+            self.INSTALLED_DEBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.INSTALLED_DEBS_FILE.write_text(json.dumps(reg, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def is_deb_installed(self, pkg_name: str) -> bool:
+        clean = (pkg_name or "").strip().lower()
+        reg = self._load_registry()
+        if clean in reg:
+            return self.pm.is_installed(clean) if self.pm else True
+        return False
+
+    def get_installed_debs(self) -> List[Dict[str, Any]]:
+        """Return list of all currently installed .deb-origin packages on the system."""
+        reg = self._load_registry()
+        results = []
+        seen = set()
+        for pkg_name, meta in list(reg.items()):
+            if self.pm and not self.pm.is_installed(pkg_name):
+                continue
+            item = dict(meta)
+            item["name"] = pkg_name
+            item["is_installed"] = True
+            item["source"] = "deb"
+            if self.pm:
+                item["desktop_entry"] = self.pm.detect_desktop_entry(pkg_name)
+            results.append(item)
+            seen.add(pkg_name)
+
+        # Also check self.pm.packages for any package built by 'Aura Deb Bridge'
+        if self.pm:
+            with self.pm._lock:
+                for p_name, p_data in self.pm.packages.items():
+                    if p_name not in seen and p_name in self.pm.installed_set:
+                        if "Aura Deb Bridge" in str(p_data.get("packager", "")):
+                            results.append({
+                                "name": p_name,
+                                "display_name": get_app_display_name(p_name),
+                                "version": self.pm.installed_versions.get(p_name, p_data.get("version", "")),
+                                "desc": p_data.get("desc", "Converted .deb application"),
+                                "icon": resolve_icon_name(p_name, p_data.get("desc", "")),
+                                "source": "deb",
+                                "is_installed": True,
+                            })
+        return results
+
+    def scan_local_debs(self) -> List[Dict[str, Any]]:
+        """Scan ~/Downloads, ~/Desktop, and ~/.cache/aura/deb_downloads for .deb archives."""
+        search_dirs = [
+            Path.home() / "Downloads",
+            Path.home() / "Desktop",
+            self.DEB_DOWNLOADS_DIR,
+        ]
+        found: List[Dict[str, Any]] = []
+        seen_paths = set()
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            try:
+                for deb_file in sorted(d.glob("*.deb"), key=lambda p: p.stat().st_mtime, reverse=True):
+                    rp = str(deb_file.resolve())
+                    if rp in seen_paths:
+                        continue
+                    seen_paths.add(rp)
+                    try:
+                        info = self.inspect_deb(rp)
+                        found.append(info)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return found
+
+    @staticmethod
+    def _merge_dir_tree(src_dir: Path, dst_dir: Path):
+        """Recursively merge src_dir into dst_dir and remove src_dir (for Arch FHS /bin, /lib normalization)."""
+        if not src_dir.exists():
+            return
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for item in src_dir.iterdir():
+            target = dst_dir / item.name
+            if item.is_dir() and not item.is_symlink():
+                DebPackageManager._merge_dir_tree(item, target)
+            else:
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                shutil.move(str(item), str(target))
+        shutil.rmtree(src_dir, ignore_errors=True)
+
+    def _convert_deb_to_arch_pkg(
+        self,
+        deb_info: Dict[str, Any],
+        staging_dir: Path,
+        wayland_fix: bool = True,
+        progress_cb: Optional[Callable[[float, str], None]] = None
+    ) -> Path:
+        """
+        Convert a .deb archive into a native Arch Linux package (.pkg.tar.zst or .pkg.tar.xz)
+        with full FHS normalization and Hyprland Wayland Electron optimization.
+        """
+        deb_path = Path(deb_info["deb_path"])
+        pkgname = deb_info["name"]
+        pkgver = deb_info["version"]
+        arch = deb_info["arch"] if deb_info["arch"] in ("x86_64", "any", "aarch64") else "x86_64"
+
+        pkgroot = staging_dir / "pkgroot"
+        pkgroot.mkdir(parents=True, exist_ok=True)
+
+        if progress_cb:
+            progress_cb(0.35, f"Extracting {deb_path.name} data payload...")
+
+        # 1. Extract data.tar.* into pkgroot
+        extracted = False
+        for member_name, member_bytes in self._iter_ar_members(deb_path):
+            if member_name.startswith("data.tar"):
+                with self._open_tar_bytes(member_name, member_bytes) as dtar:
+                    # Safe extraction filtering out path traversal, unsafe symlinks, and device nodes (AURA-SEC-004)
+                    pkgroot_resolved = pkgroot.resolve()
+                    for m in dtar.getmembers():
+                        m.name = m.name.lstrip("./").lstrip("/")
+                        if not m.name or ".." in m.name.split("/"):
+                            continue
+                        if m.isdev() or m.ischr() or m.isblk() or m.isfifo():
+                            continue
+                        dest_candidate = (pkgroot_resolved / m.name).resolve()
+                        if not str(dest_candidate).startswith(str(pkgroot_resolved)):
+                            continue
+                        if (m.issym() or m.islnk()) and (".." in (m.linkname or "").split("/")):
+                            continue
+                        dtar.extract(m, path=pkgroot, set_attrs=False)
+                extracted = True
+                break
+
+        if not extracted:
+            raise RuntimeError(f"No data.tar archive found inside {deb_path.name}")
+
+        if progress_cb:
+            progress_cb(0.55, "Normalizing Debian filesystem layout for Arch Linux...")
+
+        # 2. Arch Linux FHS Normalization:
+        # On Arch, /bin, /sbin, /usr/sbin are symlinks to /usr/bin, and /lib, /lib64 are symlinks to /usr/lib.
+        for legacy_bin in ("bin", "sbin"):
+            lb = pkgroot / legacy_bin
+            if lb.exists():
+                self._merge_dir_tree(lb, pkgroot / "usr" / "bin")
+        usr_sbin = pkgroot / "usr" / "sbin"
+        if usr_sbin.exists():
+            self._merge_dir_tree(usr_sbin, pkgroot / "usr" / "bin")
+
+        for legacy_lib in ("lib", "lib64"):
+            ll = pkgroot / legacy_lib
+            if ll.exists():
+                self._merge_dir_tree(ll, pkgroot / "usr" / "lib")
+        usr_lib64 = pkgroot / "usr" / "lib64"
+        if usr_lib64.exists():
+            self._merge_dir_tree(usr_lib64, pkgroot / "usr" / "lib")
+
+        # Handle Debian multiarch library directory (/usr/lib/x86_64-linux-gnu)
+        multiarch_dir = pkgroot / "usr" / "lib" / "x86_64-linux-gnu"
+        if multiarch_dir.exists() and multiarch_dir.is_dir():
+            self._merge_dir_tree(multiarch_dir, pkgroot / "usr" / "lib")
+
+        # Remove Debian-specific apt/cron updater scripts that break on Arch
+        for bad_dir in (pkgroot / "etc" / "apt", pkgroot / "etc" / "cron.daily", pkgroot / "etc" / "cron.weekly"):
+            if bad_dir.exists():
+                shutil.rmtree(bad_dir, ignore_errors=True)
+
+        # Ensure /opt binaries have symlinks in /usr/bin if .desktop references a bare binary name
+        opt_dir = pkgroot / "opt"
+        usr_bin = pkgroot / "usr" / "bin"
+        apps_dir = pkgroot / "usr" / "share" / "applications"
+
+        # 3. Hyprland / Wayland Electron Auto-Optimization on .desktop launchers
+        if apps_dir.exists():
+            for dt_file in apps_dir.glob("*.desktop"):
+                try:
+                    lines = dt_file.read_text(encoding="utf-8", errors="replace").splitlines()
+                    new_lines = []
+                    for line in lines:
+                        if line.startswith("Exec=") and wayland_fix and deb_info.get("is_electron"):
+                            exec_val = line[5:].strip()
+                            if "--ozone-platform" not in exec_val:
+                                # Inject --ozone-platform-hint=auto before %U/%F or at the end
+                                if " %" in exec_val:
+                                    idx = exec_val.find(" %")
+                                    exec_val = exec_val[:idx] + " --ozone-platform-hint=auto" + exec_val[idx:]
+                                else:
+                                    exec_val = exec_val + " --ozone-platform-hint=auto"
+                                line = f"Exec={exec_val}"
+                        new_lines.append(line)
+                    dt_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+        # Calculate total uncompressed size
+        total_size = 0
+        for root, dirs, files in os.walk(pkgroot):
+            for dname in dirs:
+                dp = Path(root) / dname
+                if not dp.is_symlink():
+                    try:
+                        dp.chmod(0o755)
+                    except Exception:
+                        pass
+            for fname in files:
+                fp = Path(root) / fname
+                if not fp.is_symlink():
+                    try:
+                        total_size += fp.stat().st_size
+                    except Exception:
+                        pass
+
+        if progress_cb:
+            progress_cb(0.70, "Generating Arch Linux .PKGINFO metadata...")
+
+        # 4. Write .PKGINFO
+        pkginfo_lines = [
+            "# Generated by Aura Store Deb Bridge for Arch Linux",
+            f"pkgname = {pkgname}",
+            f"pkgbase = {pkgname}",
+            f"pkgver = {pkgver}-1",
+            f"pkgdesc = {deb_info.get('desc', 'Converted Debian package').replace(chr(10), ' ')}",
+            f"url = {deb_info.get('url', '')}",
+            f"builddate = {int(time.time())}",
+            "packager = Aura Deb Bridge <aura@archlinux>",
+            f"size = {total_size}",
+            f"arch = {arch}",
+            f"license = {deb_info.get('license', 'custom')}",
+        ]
+        # Only include dependencies that are installed or exist in official repos so pacman -U never fails on unmapped AUR/Debian names
+        valid_deps = (deb_info.get("dep_report", {}).get("installed", []) +
+                      deb_info.get("dep_report", {}).get("missing_repo", []))
+        for dep in dict.fromkeys(valid_deps):
+            pkginfo_lines.append(f"depend = {dep}")
+
+        (pkgroot / ".PKGINFO").write_text("\n".join(pkginfo_lines) + "\n", encoding="utf-8")
+
+        # 5. Build Arch .pkg.tar.zst (or .pkg.tar.xz) archive
+        if progress_cb:
+            progress_cb(0.80, f"Packaging {pkgname}-{pkgver}-1-{arch}.pkg.tar.zst...")
+
+        entries = [".PKGINFO"] + [
+            p.name for p in sorted(pkgroot.iterdir()) if p.name != ".PKGINFO"
+        ]
+
+        if shutil.which("bsdtar") and shutil.which("zstd"):
+            out_pkg = staging_dir / f"{pkgname}-{pkgver}-1-{arch}.pkg.tar.zst"
+            cmd_tar = ["bsdtar", "--zstd", "-cf", str(out_pkg)] + entries
+            res_tar = subprocess.run(cmd_tar, cwd=str(pkgroot), capture_output=True, text=True, timeout=180)
+            if res_tar.returncode == 0 and out_pkg.exists():
+                return out_pkg
+
+        # Pure-Python fallback (.pkg.tar.xz or .pkg.tar.gz) supported natively by pacman -U
+        out_pkg = staging_dir / f"{pkgname}-{pkgver}-1-{arch}.pkg.tar.xz"
+        with tarfile.open(out_pkg, "w:xz") as tar:
+            for entry_name in entries:
+                tar.add(pkgroot / entry_name, arcname=entry_name)
+        return out_pkg
+
+    def install_deb(
+        self,
+        deb_path: str,
+        wayland_fix: bool = True,
+        use_debtap: bool = False,
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+        complete_cb: Optional[Callable[[bool, str], None]] = None,
+        sync_run: bool = False
+    ):
+        """
+        Convert and install a .deb file seamlessly on Arch Linux.
+        1. Inspects .deb metadata and translates Debian dependencies to Arch packages.
+        2. Installs any missing official Arch repository dependencies via pacman -S --needed --asdeps.
+        3. Converts the .deb to a compliant Arch package (.pkg.tar.zst/.xz) with FHS normalization & Wayland fixes.
+        4. Installs the package via 'sudo pacman -U --noconfirm'.
+        """
+        def _report(frac: float, msg: str):
+            if progress_cb:
+                try:
+                    progress_cb(frac, msg)
+                except Exception:
+                    pass
+
+        def _finish(ok: bool, msg: str):
+            if complete_cb:
+                try:
+                    complete_cb(ok, msg)
+                except Exception:
+                    pass
+
+        def _task():
+            nonlocal _report
+            staging_dir = Path(tempfile.mkdtemp(prefix="aura-deb-build-"))
+            try:
+                _report(0.08, "Inspecting Debian (.deb) package metadata...")
+                info = self.inspect_deb(deb_path)
+                pkgname = info["name"]
+                disp_name = info.get("display_name", pkgname)
+
+                env = os.environ.copy()
+                askpass = get_askpass_script()
+                if askpass.exists():
+                    env["SUDO_ASKPASS"] = str(askpass)
+                env["LC_ALL"] = "C"
+                is_pwless = PackageManager.is_passwordless_configured()
+                sudo_prefix = ["sudo", "-n"] if is_pwless else ["sudo", "-A"]
+
+                deb_key = pkgname.strip().lower()
+                self.active_deb_installs[deb_key] = (0.10, f"Preparing {disp_name} (.deb)...")
+                orig_report = _report
+                def _tracked_report(frac: float, msg: str):
+                    self.active_deb_installs[deb_key] = (frac, msg)
+                    orig_report(frac, msg)
+                _report = _tracked_report
+
+                # Step 1: Convert .deb to native Arch package (.pkg.tar.zst/.xz) in isolated staging_dir FIRST
+                pkg_archive: Optional[Path] = None
+                if use_debtap and shutil.which("debtap") and Path("/var/cache/debtap").exists():
+                    _report(0.35, f"Converting {info['deb_filename']} with debtap...")
+                    shutil.copy2(info["deb_path"], staging_dir / info["deb_filename"])
+                    dt_proc = subprocess.run(
+                        ["debtap", "-q", info["deb_filename"]],
+                        cwd=str(staging_dir),
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        timeout=240
+                    )
+                    if dt_proc.returncode == 0:
+                        built = list(staging_dir.glob("*.pkg.tar.*"))
+                        if built:
+                            pkg_archive = built[0]
+
+                if pkg_archive is None:
+                    pkg_archive = self._convert_deb_to_arch_pkg(
+                        info,
+                        staging_dir=staging_dir,
+                        wayland_fix=wayland_fix,
+                        progress_cb=_report
+                    )
+
+                # Step 2: Acquire GLOBAL_ALPM_LOCK and wait safely for any active Pacman/AUR operation
+                with GLOBAL_ALPM_LOCK:
+                    wait_for_alpm_lock(progress_cb=_report, max_wait=240, env=env)
+
+                    missing_repo = info.get("dep_report", {}).get("missing_repo", [])
+                    if missing_repo:
+                        _report(0.84, f"Installing {len(missing_repo)} Arch dependencies ({', '.join(missing_repo[:3])})...")
+                        dep_cmd = sudo_prefix + ["pacman", "-S", "--needed", "--asdeps", "--noconfirm"] + missing_repo
+                        dep_res = subprocess.run(dep_cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=300)
+                        if dep_res.returncode != 0 and sudo_prefix == ["sudo", "-n"]:
+                            sudo_prefix = ["sudo", "-A"]
+                            subprocess.run(sudo_prefix + ["pacman", "-S", "--needed", "--asdeps", "--noconfirm"] + missing_repo,
+                                           stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=300)
+
+                    # Step 3: Install converted Arch package via pacman -U
+                    _report(0.90, f"Installing {disp_name} into Arch system database (pacman -U)...")
+                    inst_cmd = sudo_prefix + ["pacman", "-U", "--noconfirm", str(pkg_archive)]
+                    proc = subprocess.run(
+                        inst_cmd,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=env,
+                        timeout=300
+                    )
+                    if proc.returncode != 0 and sudo_prefix == ["sudo", "-n"] and ("password is required" in (proc.stderr or "").lower() or "authentication" in (proc.stderr or "").lower()):
+                        sudo_prefix = ["sudo", "-A"]
+                        proc = subprocess.run(
+                            sudo_prefix + ["pacman", "-U", "--noconfirm", str(pkg_archive)],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            text=True,
+                            env=env,
+                            timeout=300
+                        )
+                    if proc.returncode != 0:
+                        inst_cmd_retry = sudo_prefix + ["pacman", "-U", "--noconfirm", "--overwrite", "*", str(pkg_archive)]
+                        proc = subprocess.run(
+                            inst_cmd_retry,
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            text=True,
+                            env=env,
+                            timeout=300
+                        )
+
+                if proc.returncode != 0:
+                    err = (proc.stderr or proc.stdout or f"pacman -U exited with code {proc.returncode}").strip()
+                    _finish(False, err.splitlines()[-1] if err else "Failed installing converted .deb package")
+                    return
+
+                # Step 5: Record in installed_debs registry and refresh caches
+                reg = self._load_registry()
+                reg[pkgname] = {
+                    "name": pkgname,
+                    "display_name": disp_name,
+                    "version": info["version"],
+                    "deb_version": info["deb_version"],
+                    "desc": info["desc"],
+                    "icon": info["icon"],
+                    "deb_path": info["deb_path"],
+                    "deb_filename": info["deb_filename"],
+                    "installed_at": int(time.time()),
+                    "wayland_optimized": bool(wayland_fix and info.get("is_electron")),
+                }
+                self._save_registry(reg)
+
+                if self.pm:
+                    self.pm.refresh_installed()
+                    self.pm.load_pacman_db(force_reload=True)
+
+                _report(1.0, f"✓ Installed {disp_name} ({info['deb_filename']}) seamlessly!")
+                _finish(True, f"Successfully installed {disp_name} from {info['deb_filename']}!")
+            except Exception as e:
+                _finish(False, str(e))
+            finally:
+                if hasattr(self, "active_deb_installs"):
+                    self.active_deb_installs.pop(locals().get("pkgname", "").strip().lower(), None)
+                shutil.rmtree(staging_dir, ignore_errors=True)
+
+        if sync_run:
+            _task()
+        else:
+            threading.Thread(target=_task, daemon=True).start()
+
+    def download_and_install_deb(
+        self,
+        url: str,
+        wayland_fix: bool = True,
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+        complete_cb: Optional[Callable[[bool, str], None]] = None
+    ):
+        """Download a .deb package from a direct HTTP/HTTPS URL and install it seamlessly."""
+        def _task():
+            try:
+                clean_url = url.strip()
+                if not clean_url.startswith(("http://", "https://")):
+                    if complete_cb:
+                        complete_cb(False, "URL must start with http:// or https://")
+                    return
+
+                parsed = urllib.parse.urlparse(clean_url)
+                fname = os.path.basename(parsed.path) or "downloaded-package.deb"
+                if not fname.lower().endswith(".deb"):
+                    fname += ".deb"
+                fname = re.sub(r'[^a-zA-Z0-9._+-]', '_', fname)
+                dest_path = self.DEB_DOWNLOADS_DIR / fname
+
+                if progress_cb:
+                    progress_cb(0.03, f"Connecting to download {fname}...")
+
+                req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0 Aura-Store/2.0"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    total_bytes = int(resp.headers.get("Content-Length", "0") or "0")
+                    downloaded = 0
+                    chunk_size = 65536
+                    with open(dest_path, "wb") as out_f:
+                        while True:
+                            chunk = resp.read(chunk_size)
+                            if not chunk:
+                                break
+                            out_f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_bytes > 0 and progress_cb:
+                                dl_frac = min(0.30, 0.03 + (downloaded / total_bytes) * 0.27)
+                                progress_cb(dl_frac, f"Downloading {fname} ({format_bytes(downloaded)} / {format_bytes(total_bytes)})...")
+                            elif progress_cb:
+                                progress_cb(0.15, f"Downloading {fname} ({format_bytes(downloaded)})...")
+
+                # Chain into install_deb synchronously in this worker thread
+                self.install_deb(
+                    str(dest_path),
+                    wayland_fix=wayland_fix,
+                    progress_cb=progress_cb,
+                    complete_cb=complete_cb,
+                    sync_run=True
+                )
+            except Exception as e:
+                if complete_cb:
+                    complete_cb(False, f"Download failed: {e}")
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def uninstall_deb(
+        self,
+        pkg_name: str,
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+        complete_cb: Optional[Callable[[bool, str], None]] = None,
+        sync_run: bool = False
+    ):
+        """Uninstall a converted .deb package cleanly via pacman -Rns."""
+        def _task():
+            clean = self._sanitize_arch_pkgname(pkg_name)
+            env = os.environ.copy()
+            askpass = get_askpass_script()
+            if askpass.exists():
+                env["SUDO_ASKPASS"] = str(askpass)
+            env["LC_ALL"] = "C"
+            sudo_prefix = ["sudo", "-n"] if PackageManager.is_passwordless_configured() else ["sudo", "-A"]
+
+            if progress_cb:
+                progress_cb(0.3, f"Removing {clean} via pacman...")
+
+            proc = subprocess.run(
+                sudo_prefix + ["pacman", "-Rns", "--noconfirm", clean],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=120
+            )
+            if proc.returncode == 0:
+                reg = self._load_registry()
+                if clean in reg:
+                    del reg[clean]
+                    self._save_registry(reg)
+                if self.pm:
+                    self.pm.refresh_installed()
+                if progress_cb:
+                    progress_cb(1.0, f"Removed {clean} successfully!")
+                if complete_cb:
+                    complete_cb(True, f"Removed {clean} successfully.")
+            else:
+                err = (proc.stderr or proc.stdout or f"Exited with code {proc.returncode}").strip()
+                if complete_cb:
+                    complete_cb(False, err)
+
+        if sync_run:
+            _task()
+        else:
+            threading.Thread(target=_task, daemon=True).start()
+
+
+class HyprlandManager:
+    """
+    Hyprland Wayland Compositor Integration, Diagnostics & Optimization Engine.
+    Features:
+    - Live inspection of Hyprland version, active monitors, refresh rates, scaling, and portals
+    - Companion daemon health checks (xdg-desktop-portal-hyprland, Polkit agent, PipeWire, Waybar, Notifications)
+    - One-click Hyprland window rules & Super+A shortcut injection into ~/.config/hypr/hyprland.conf + live hyprctl reload
+    - One-click native Wayland Ozone flag optimizer for Electron/Chromium desktop applications
+    """
+
+    HYPR_CONF_PATH = Path.home() / ".config" / "hypr" / "hyprland.conf"
+    ELECTRON_FLAGS_FILES = [
+        Path.home() / ".config" / "electron-flags.conf",
+        Path.home() / ".config" / "code-flags.conf",
+        Path.home() / ".config" / "spotify-flags.conf",
+        Path.home() / ".config" / "chromium-flags.conf",
+        Path.home() / ".config" / "brave-flags.conf",
+    ]
+
+    def __init__(self, pm: Optional["PackageManager"] = None):
+        self.pm = pm
+
+    @staticmethod
+    def _is_proc_running(names: List[str]) -> Optional[str]:
+        for name in names:
+            try:
+                res = subprocess.run(["pgrep", "-x", name], capture_output=True, timeout=2)
+                if res.returncode == 0:
+                    return name
+            except Exception:
+                pass
+            try:
+                res = subprocess.run(["pgrep", "-f", name], capture_output=True, timeout=2)
+                if res.returncode == 0:
+                    return name
+            except Exception:
+                pass
+        return None
+
+    def get_status(self) -> Dict[str, Any]:
+        """Gather comprehensive Hyprland compositor, monitor, portal, and companion stack status."""
+        hypr_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+        wayland_disp = os.environ.get("WAYLAND_DISPLAY", "")
+        xdg_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
+        is_hyprland = bool(hypr_sig or "hyprland" in xdg_desktop.lower() or shutil.which("hyprctl"))
+
+        version_str = "Not detected"
+        monitors: List[Dict[str, Any]] = []
+        if shutil.which("hyprctl"):
+            try:
+                vproc = subprocess.run(["hyprctl", "version"], capture_output=True, text=True, timeout=2)
+                if vproc.returncode == 0 and vproc.stdout:
+                    first_line = vproc.stdout.splitlines()[0].strip()
+                    m_ver = re.search(r'(Hyprland\s+[0-9\.]+(?:-[a-zA-Z0-9]+)?)', first_line)
+                    m_br = re.search(r'branch\s+([^\s,]+)', first_line)
+                    if m_ver:
+                        version_str = m_ver.group(1)
+                        if m_br and m_br.group(1) not in version_str:
+                            version_str += f" ({m_br.group(1)})"
+                    else:
+                        version_str = first_line[:38]
+            except Exception:
+                pass
+            try:
+                mproc = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=2)
+                if mproc.returncode == 0 and mproc.stdout.strip().startswith("["):
+                    mdata = json.loads(mproc.stdout)
+                    for m in mdata:
+                        monitors.append({
+                            "name": m.get("name", "Display"),
+                            "model": m.get("make", "") + (" " + m.get("model", "") if m.get("model") else ""),
+                            "width": m.get("width", 1920),
+                            "height": m.get("height", 1080),
+                            "refresh": round(float(m.get("refreshRate", 60.0)), 1),
+                            "scale": m.get("scale", 1.0),
+                        })
+            except Exception:
+                pass
+
+        portal_installed = bool(self.pm and self.pm.is_installed("xdg-desktop-portal-hyprland"))
+        polkit_running = self._is_proc_running(["hyprpolkitagent", "polkit-kde-authentication-agent-1", "polkit-gnome-authentication-agent-1", "lxpolkit"])
+        bar_running = self._is_proc_running(["waybar", "ags", "eww", "hyprpanel", "quickshell"])
+        wall_running = self._is_proc_running(["hyprpaper", "swww-daemon", "wpaperd", "mpvpaper"])
+        notif_running = self._is_proc_running(["swaync", "mako", "dunst"])
+        audio_running = self._is_proc_running(["pipewire", "pulseaudio"])
+
+        rules_configured = self.are_window_rules_configured()
+        wayland_flags_configured = self.are_electron_wayland_flags_configured()
+
+        return {
+            "is_hyprland": is_hyprland,
+            "hypr_active": bool(hypr_sig),
+            "version": version_str,
+            "wayland_display": wayland_disp or "wayland-1",
+            "monitors": monitors,
+            "portal_installed": portal_installed,
+            "polkit_agent": polkit_running or ("Installed" if (self.pm and self.pm.is_installed("hyprpolkitagent")) else None),
+            "status_bar": bar_running,
+            "wallpaper_daemon": wall_running,
+            "notification_daemon": notif_running,
+            "audio_server": audio_running,
+            "rules_configured": rules_configured,
+            "wayland_flags_configured": wayland_flags_configured,
+        }
+
+    def are_window_rules_configured(self) -> bool:
+        if not self.HYPR_CONF_PATH.exists():
+            return False
+        try:
+            content = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace")
+            return "hyprland-aura.conf" in content or "io.github.aura" in content
+        except Exception:
+            return False
+
+    def configure_window_rules(self, enable: bool = True) -> Tuple[bool, str]:
+        """Inject or remove Aura floating window rules and Super+A shortcut in ~/.config/hypr/hyprland.conf."""
+        try:
+            self.HYPR_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
+            rule_candidates = [
+                Path.home() / ".local" / "share" / "aura" / "data" / "hyprland-aura.conf",
+                Path("/usr/share/aura/hyprland-aura.conf"),
+                Path(__file__).resolve().parent / "data" / "hyprland-aura.conf",
+            ]
+            rule_file = next((p for p in rule_candidates if p.exists()), rule_candidates[0])
+            if not rule_file.exists():
+                rule_file.parent.mkdir(parents=True, exist_ok=True)
+                rule_file.write_text(
+                    "windowrulev2 = float, class:^(io.github.aura)$\n"
+                    "windowrulev2 = center, class:^(io.github.aura)$\n"
+                    "windowrulev2 = size 1040 680, class:^(io.github.aura)$\n"
+                    "windowrulev2 = opaque, class:^(io.github.aura)$\n",
+                    encoding="utf-8"
+                )
+
+            existing = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace") if self.HYPR_CONF_PATH.exists() else ""
+            marker_start = "# >>> Aura Store Hyprland Integration >>>"
+            marker_end = "# <<< Aura Store Hyprland Integration <<<"
+
+            # Clean any existing block
+            cleaned_lines = []
+            in_block = False
+            for line in existing.splitlines():
+                if line.strip() == marker_start:
+                    in_block = True
+                    continue
+                if line.strip() == marker_end:
+                    in_block = False
+                    continue
+                if "hyprland-aura.conf" in line and not enable:
+                    continue
+                if not in_block:
+                    cleaned_lines.append(line)
+
+            if enable:
+                block = [
+                    "",
+                    marker_start,
+                    f"source = {rule_file}",
+                    marker_end,
+                ]
+                cleaned_lines.extend(block)
+
+            self.HYPR_CONF_PATH.write_text("\n".join(cleaned_lines).strip() + "\n", encoding="utf-8")
+
+            if shutil.which("hyprctl") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=3)
+
+            if enable:
+                return True, "Hyprland floating window rules applied and compositor reloaded!"
+            return True, "Aura window rules removed from hyprland.conf."
+        except Exception as e:
+            return False, f"Failed updating hyprland.conf: {e}"
+
+    def are_electron_wayland_flags_configured(self) -> bool:
+        ef = self.ELECTRON_FLAGS_FILES[0]
+        if not ef.exists():
+            return False
+        try:
+            txt = ef.read_text(encoding="utf-8", errors="replace")
+            return "ozone-platform" in txt
+        except Exception:
+            return False
+
+    def configure_electron_wayland_flags(self, enable: bool = True) -> Tuple[bool, str]:
+        """Configure native Wayland Ozone rendering flags for Electron, VS Code, Spotify, Brave, and Chromium on Hyprland."""
+        flags_content = (
+            "--enable-features=UseOzonePlatform,WaylandWindowDecorations\n"
+            "--ozone-platform-hint=auto\n"
+        )
+        try:
+            for fpath in self.ELECTRON_FLAGS_FILES:
+                if enable:
+                    fpath.parent.mkdir(parents=True, exist_ok=True)
+                    if fpath.exists():
+                        cur = fpath.read_text(encoding="utf-8", errors="replace")
+                        if "ozone-platform" not in cur:
+                            fpath.write_text(cur.rstrip() + "\n" + flags_content, encoding="utf-8")
+                    else:
+                        fpath.write_text(flags_content, encoding="utf-8")
+                else:
+                    if fpath.exists():
+                        lines = [
+                            l for l in fpath.read_text(encoding="utf-8", errors="replace").splitlines()
+                            if "ozone-platform" not in l and "WaylandWindowDecorations" not in l
+                        ]
+                        if lines:
+                            fpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                        else:
+                            fpath.unlink(missing_ok=True)
+            if enable:
+                return True, "Native Wayland Ozone flags enabled for Electron, Code, Spotify, and Chromium!"
+            return True, "Electron Wayland flags reset to default."
+        except Exception as e:
+            return False, f"Failed configuring Electron Wayland flags: {e}"
+
+
+class SystemDoctor:
+    """
+    Arch Linux System Health Diagnostics & One-Click Repair Suite.
+    Handles:
+    - Stale Pacman lock (/var/lib/pacman/db.lck) detection and safe removal
+    - Orphaned packages (pacman -Qdt) scanning and batch cleanup
+    - Arch Linux PGP keyring & database sync repair (archlinux-keyring)
+    - Unmerged .pacnew / .pacsave configuration file detection
+    - Failed systemd service inspection
+    """
+
+    LOCK_PATH = Path("/var/lib/pacman/db.lck")
+
+    def __init__(self, pm: Optional["PackageManager"] = None):
+        self.pm = pm
+
+    def get_pacman_lock_status(self) -> Dict[str, Any]:
+        locked = self.LOCK_PATH.exists()
+        running_procs = []
+        if locked:
+            for proc_name in ("pacman", "paru", "yay", "makepkg"):
+                try:
+                    res = subprocess.run(["pgrep", "-x", proc_name], capture_output=True, text=True, timeout=2)
+                    if res.returncode == 0 and res.stdout.strip():
+                        running_procs.append(proc_name)
+                except Exception:
+                    pass
+        return {
+            "locked": locked,
+            "active_processes": running_procs,
+            "is_stale": bool(locked and not running_procs),
+        }
+
+    def get_orphan_packages(self) -> List[Dict[str, str]]:
+        orphans = []
+        try:
+            res = subprocess.run(["pacman", "-Qdt"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        name, ver = parts[0], parts[1]
+                        pkg_meta = self.pm.packages.get(name, {}) if self.pm else {}
+                        orphans.append({
+                            "name": name,
+                            "version": ver,
+                            "desc": pkg_meta.get("desc", "Unused orphaned dependency package"),
+                            "size_str": format_bytes(pkg_meta.get("isize", 0)),
+                        })
+        except Exception:
+            pass
+        return orphans
+
+    def get_pacnew_files(self) -> List[str]:
+        found = []
+        search_dirs = [Path("/etc"), Path("/etc/pacman.d"), Path("/etc/security"), Path("/etc/systemd")]
+        for d in search_dirs:
+            if not d.exists():
+                continue
+            try:
+                for p in d.glob("*.pacnew"):
+                    found.append(str(p))
+                for p in d.glob("*.pacsave"):
+                    found.append(str(p))
+            except Exception:
+                pass
+        return sorted(set(found))
+
+    def get_failed_services(self) -> List[str]:
+        failed = []
+        if shutil.which("systemctl"):
+            try:
+                res = subprocess.run(
+                    ["systemctl", "--failed", "--no-legend", "--plain"],
+                    capture_output=True, text=True, timeout=3
+                )
+                if res.returncode == 0:
+                    for line in res.stdout.splitlines():
+                        parts = line.strip().split()
+                        if parts:
+                            failed.append(parts[0])
+            except Exception:
+                pass
+        return failed
+
+    def scan_health(self) -> Dict[str, Any]:
+        lock_st = self.get_pacman_lock_status()
+        orphans = self.get_orphan_packages()
+        pacnews = self.get_pacnew_files()
+        failed_svcs = self.get_failed_services()
+        return {
+            "lock_status": lock_st,
+            "orphans": orphans,
+            "orphan_count": len(orphans),
+            "pacnew_files": pacnews,
+            "pacnew_count": len(pacnews),
+            "failed_services": failed_svcs,
+            "failed_services_count": len(failed_svcs),
+        }
+
+    def unlock_pacman_db(self, complete_cb: Optional[Callable[[bool, str], None]] = None):
+        def _task():
+            st = self.get_pacman_lock_status()
+            if not st["locked"]:
+                if complete_cb:
+                    complete_cb(True, "Pacman database is not locked.")
+                return
+            if st["active_processes"] or (self.pm and self.pm.is_busy()):
+                if complete_cb:
+                    procs_str = ", ".join(st["active_processes"]) if st["active_processes"] else "Aura package installer"
+                    complete_cb(False, f"Cannot remove lock while {procs_str} is actively running.")
+                return
+            env = os.environ.copy()
+            askpass = get_askpass_script()
+            if askpass.exists():
+                env["SUDO_ASKPASS"] = str(askpass)
+            res = subprocess.run(["sudo", "-n", "rm", "-f", str(self.LOCK_PATH)], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=5)
+            if res.returncode != 0 and self.LOCK_PATH.exists():
+                res = subprocess.run(["sudo", "-A", "rm", "-f", str(self.LOCK_PATH)], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=30)
+            ok = (res.returncode == 0 and not self.LOCK_PATH.exists())
+            if complete_cb:
+                complete_cb(ok, "Stale Pacman database lock removed!" if ok else f"Failed removing lock: {res.stderr}")
+        threading.Thread(target=_task, daemon=True).start()
+
+    def remove_orphans(self, progress_cb: Optional[Callable[[float, str], None]] = None, complete_cb: Optional[Callable[[bool, str], None]] = None):
+        def _task():
+            with GLOBAL_ALPM_LOCK:
+                env = os.environ.copy()
+                askpass = get_askpass_script()
+                if askpass.exists():
+                    env["SUDO_ASKPASS"] = str(askpass)
+                env["LC_ALL"] = "C"
+                wait_for_alpm_lock(progress_cb=progress_cb, max_wait=180, env=env)
+                orphans = [o["name"] for o in self.get_orphan_packages()]
+                if not orphans:
+                    if complete_cb:
+                        complete_cb(True, "No orphaned packages to remove.")
+                    return
+                if progress_cb:
+                    progress_cb(0.3, f"Removing {len(orphans)} orphaned packages...")
+                res = subprocess.run(
+                    ["sudo", "-n", "pacman", "-Rns", "--noconfirm"] + orphans,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, env=env, timeout=180
+                )
+                if res.returncode != 0:
+                    res = subprocess.run(
+                        ["sudo", "-A", "pacman", "-Rns", "--noconfirm"] + orphans,
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, env=env, timeout=180
+                    )
+                if res.returncode == 0:
+                    if self.pm:
+                        self.pm.refresh_installed()
+                    if progress_cb:
+                        progress_cb(1.0, f"Removed {len(orphans)} orphaned packages!")
+                    if complete_cb:
+                        complete_cb(True, f"Successfully removed {len(orphans)} orphaned packages!")
+                else:
+                    if complete_cb:
+                        complete_cb(False, f"Failed removing orphans: {res.stderr or res.stdout}")
+        threading.Thread(target=_task, daemon=True).start()
+
+    def repair_keyring(self, progress_cb: Optional[Callable[[float, str], None]] = None, complete_cb: Optional[Callable[[bool, str], None]] = None):
+        def _task():
+            with GLOBAL_ALPM_LOCK:
+                env = os.environ.copy()
+                askpass = get_askpass_script()
+                if askpass.exists():
+                    env["SUDO_ASKPASS"] = str(askpass)
+                env["LC_ALL"] = "C"
+                wait_for_alpm_lock(progress_cb=progress_cb, max_wait=180, env=env)
+                try:
+                    if progress_cb:
+                        progress_cb(0.2, "Initializing Pacman GPG keyring (pacman-key --init)...")
+                    r1 = subprocess.run(["sudo", "-n", "pacman-key", "--init"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=60)
+                    if r1.returncode != 0:
+                        subprocess.run(["sudo", "-A", "pacman-key", "--init"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=60)
+                    if progress_cb:
+                        progress_cb(0.5, "Populating Arch Linux master keys (pacman-key --populate)...")
+                    r2 = subprocess.run(["sudo", "-n", "pacman-key", "--populate"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=90)
+                    if r2.returncode != 0:
+                        subprocess.run(["sudo", "-A", "pacman-key", "--populate"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=90)
+                    if progress_cb:
+                        progress_cb(0.8, "Refreshing archlinux-keyring & sync databases...")
+                    res = subprocess.run(
+                        ["sudo", "-n", "pacman", "-Sy", "--needed", "--noconfirm", "archlinux-keyring"],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, env=env, timeout=180
+                    )
+                    if res.returncode != 0:
+                        res = subprocess.run(
+                            ["sudo", "-A", "pacman", "-Sy", "--needed", "--noconfirm", "archlinux-keyring"],
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, env=env, timeout=180
+                        )
+                    if res.returncode == 0:
+                        if progress_cb:
+                            progress_cb(1.0, "Arch Linux keyring & databases repaired!")
+                        if complete_cb:
+                            complete_cb(True, "Arch Linux GPG keyring and sync databases repaired successfully!")
+                    else:
+                        if complete_cb:
+                            complete_cb(False, f"Keyring sync finished with warning: {res.stderr or res.stdout}")
+                except Exception as e:
+                    if complete_cb:
+                        complete_cb(False, f"Keyring repair failed: {e}")
+        threading.Thread(target=_task, daemon=True).start()

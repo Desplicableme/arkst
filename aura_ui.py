@@ -17,6 +17,8 @@ import os
 import sys
 import re
 import time
+import shutil
+import subprocess
 import threading
 import urllib.request
 import urllib.parse
@@ -66,46 +68,134 @@ def get_cached_icon_file(name: str, icon_url: str = "") -> str:
     return resolve_icon_name(name)
 
 
+_ICON_TEXTURE_CACHE: Dict[ Any, Any ] = {}
+
+
 def create_scaled_image(icon_target: str, size: int = 40) -> Gtk.Image:
-    """Safely and symmetrically scale any vector icon name or image file to exact pixel dimensions."""
+    """
+    Safely and symmetrically scale any vector icon name or image file to exact pixel dimensions.
+    CRITICAL: Never set hexpand=True or vexpand=True on the returned Gtk.Image, because GTK4
+    propagates child expand flags upward to parent boxes (which would stretch brand_box and icon columns).
+    """
+    def _configure(im: Gtk.Image) -> Gtk.Image:
+        im.set_pixel_size(size)
+        im.set_halign(Gtk.Align.CENTER)
+        im.set_valign(Gtk.Align.CENTER)
+        im.set_hexpand(False)
+        im.set_vexpand(False)
+        return im
+
     eff_target = icon_target
     if icon_target and icon_target.startswith(("http://", "https://")):
         eff_target = get_cached_icon_file(os.path.basename(icon_target).split("?")[0], icon_target)
     if eff_target and os.path.isabs(eff_target) and os.path.exists(eff_target):
+        cache_key = (eff_target, size)
+        cached_tex = _ICON_TEXTURE_CACHE.get(cache_key)
+        if cached_tex is not None:
+            return _configure(Gtk.Image.new_from_paintable(cached_tex))
         try:
             if hasattr(GdkPixbuf.Pixbuf, "new_from_file_at_scale") and hasattr(Gdk.Texture, "new_for_pixbuf"):
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(eff_target, size, size, True)
                 texture = Gdk.Texture.new_for_pixbuf(pixbuf)
-                img = Gtk.Image.new_from_paintable(texture)
-                img.set_pixel_size(size)
-                return img
-            img = Gtk.Image.new_from_file(eff_target)
-            img.set_pixel_size(size)
-            return img
+                if len(_ICON_TEXTURE_CACHE) < 512:
+                    _ICON_TEXTURE_CACHE[cache_key] = texture
+                return _configure(Gtk.Image.new_from_paintable(texture))
+            return _configure(Gtk.Image.new_from_file(eff_target))
         except Exception:
             try:
-                img = Gtk.Image.new_from_file(eff_target)
-                img.set_pixel_size(size)
-                return img
+                return _configure(Gtk.Image.new_from_file(eff_target))
             except Exception:
                 pass
     clean_target = eff_target if eff_target else "system-software-install"
-    img = Gtk.Image.new_from_icon_name(clean_target)
-    img.set_pixel_size(size)
-    return img
+    return _configure(Gtk.Image.new_from_icon_name(clean_target))
 
 
 # Authentic Apple Mac App Store Design System CSS
 APPLE_CSS = """
-/* Keyframe Shimmer Animations */
+/* Modern Keyframe Animations & Transitions */
 @keyframes mac-pulse {
-    0% { opacity: 0.6; }
+    0% { opacity: 0.55; }
     50% { opacity: 1.0; }
-    100% { opacity: 0.6; }
+    100% { opacity: 0.55; }
+}
+
+@keyframes aura-hero-float {
+    0% { transform: translateY(0px) scale(1.0); }
+    50% { transform: translateY(-4px) scale(1.03); }
+    100% { transform: translateY(0px) scale(1.0); }
+}
+
+@keyframes aura-watermark-drift {
+    0% { transform: scale(1.0) rotate(0deg); opacity: 0.11; }
+    50% { transform: scale(1.06) rotate(-2deg); opacity: 0.16; }
+    100% { transform: scale(1.0) rotate(0deg); opacity: 0.11; }
+}
+
+@keyframes aura-glow-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.35); }
+    70% { box-shadow: 0 0 0 8px rgba(10, 132, 255, 0.0); }
+    100% { box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.0); }
 }
 
 .mac-loading-shimmer {
-    animation: mac-pulse 1.8s ease-in-out infinite;
+    animation: mac-pulse 1.5s ease-in-out infinite;
+}
+
+.aura-card-staging {
+    opacity: 0.0;
+    transform: translateY(12px) scale(0.98);
+}
+
+/* Sleek Minimalist Scrollbars — Zero Trough Background Capsule */
+scrollbar,
+scrollbar.overlay-indicator,
+scrollbar.overlay-indicator.dragging,
+scrollbar.overlay-indicator.hovering,
+scrollbar contents,
+scrollbar range,
+scrollbar trough {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+}
+
+scrollbar slider,
+scrollbar.overlay-indicator slider,
+scrollbar.overlay-indicator.hovering slider,
+scrollbar.overlay-indicator.dragging slider {
+    min-width: 4px;
+    min-height: 32px;
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.16);
+    background-color: rgba(255, 255, 255, 0.16);
+    border: none;
+    box-shadow: none;
+    margin: 2px 3px;
+    padding: 0;
+    transition: background-color 150ms ease;
+}
+
+scrollbar slider:hover,
+scrollbar.overlay-indicator.hovering slider:hover {
+    background-color: rgba(255, 255, 255, 0.32);
+}
+
+.mac-sidebar scrollbar,
+.mac-sidebar scrollbar trough,
+.mac-sidebar scrollbar slider {
+    min-width: 0px;
+    min-height: 0px;
+    opacity: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
 }
 
 /* Modern Animated Search Spinner & Status Indicator */
@@ -512,7 +602,8 @@ scrolledwindow viewport {
 }
 
 .mac-hero-watermark {
-    opacity: 0.12;
+    opacity: 0.13;
+    animation: aura-watermark-drift 7s ease-in-out infinite;
 }
 
 .mac-hero-tag {
@@ -537,15 +628,16 @@ scrolledwindow viewport {
 }
 
 .mac-hero-squircle {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.04) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.04) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 22px;
     min-width: 88px;
     min-height: 88px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
     padding: 0;
     margin: 0;
-    transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: aura-hero-float 5s ease-in-out infinite;
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 240ms ease;
 }
 
 .mac-hero-squircle:hover {
@@ -705,12 +797,69 @@ button.mac-hero-dot-active,
 
 /* Symmetrical Multi-Column Mac App Store Item Row */
 .mac-app-row {
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 14px;
-    padding: 10px 14px;
-    min-height: 72px;
-    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.048) 0%, rgba(255, 255, 255, 0.018) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 12px 14px;
+    min-height: 80px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+                background 220ms ease,
+                border-color 220ms ease,
+                box-shadow 240ms ease;
+}
+
+.mac-source-badge {
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    padding: 1px 6px;
+    border-radius: 5px;
+}
+
+.mac-source-pacman {
+    background: rgba(10, 132, 255, 0.14);
+    color: #47a3ff;
+    border: 1px solid rgba(10, 132, 255, 0.28);
+}
+
+.mac-source-aur {
+    background: rgba(191, 90, 242, 0.15);
+    color: #d48aff;
+    border: 1px solid rgba(191, 90, 242, 0.30);
+}
+
+.mac-source-deb {
+    background: rgba(255, 159, 10, 0.16);
+    color: #ffb340;
+    border: 1px solid rgba(255, 159, 10, 0.32);
+}
+
+.mac-source-snap {
+    background: rgba(228, 92, 40, 0.16);
+    color: #ff8552;
+    border: 1px solid rgba(228, 92, 40, 0.32);
+}
+
+.mac-source-docker {
+    background: rgba(36, 150, 237, 0.16);
+    color: #5ac8fa;
+    border: 1px solid rgba(36, 150, 237, 0.32);
+}
+
+.mac-log-terminal-box {
+    background-color: #08090d;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-top: 6px;
+}
+
+.mac-log-text {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 11px;
+    color: #a1a1aa;
 }
 
 flowboxchild {
@@ -722,10 +871,10 @@ flowboxchild {
 }
 
 .mac-app-row:hover {
-    transform: translateY(-2px);
-    background-color: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.16);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    transform: translateY(-3px);
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.085) 0%, rgba(10, 132, 255, 0.04) 100%);
+    border-color: rgba(10, 132, 255, 0.32);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42), 0 0 16px rgba(10, 132, 255, 0.08);
 }
 
 .mac-app-row:active {
@@ -775,9 +924,9 @@ flowboxchild {
 
 /* Symmetrical Full-Rounded Action Pill Buttons (GET, OPEN, INSTALLED, UPDATE, UNINSTALL, QUEUED) */
 .mac-btn-get, .mac-btn-open, .mac-btn-installed, .mac-btn-update, .mac-btn-uninstall, .mac-btn-queued {
-    min-width: 82px;
-    min-height: 32px;
-    padding: 0px 14px;
+    min-width: 68px;
+    min-height: 28px;
+    padding: 0px 10px;
     border-radius: 9999px;
     font-size: 11.5px;
     font-weight: 700;
@@ -2209,12 +2358,11 @@ class MacHeroCarousel(Gtk.Overlay):
 
         is_upgradable = False
         if pm:
-            with getattr(pm, "_lock", threading.Lock()):
-                upg_list = getattr(pm, "upgradable_list", [])
-                is_upgradable = any(
-                    (u.get("name") or "").strip().lower() in (sid_low, res_name, f"{sid_low}-bin")
-                    for u in upg_list
-                )
+            upg_list = list(getattr(pm, "upgradable_list", []) or [])
+            is_upgradable = any(
+                (u.get("name") or "").strip().lower() in (sid_low, res_name, f"{sid_low}-bin")
+                for u in upg_list
+            )
 
         if is_updating:
             action_btn = Gtk.Button(label="UPDATING...")
@@ -2237,7 +2385,7 @@ class MacHeroCarousel(Gtk.Overlay):
             action_btn.add_css_class("mac-btn-open" if is_installed else "mac-btn-get")
             action_btn.set_sensitive(True)
 
-        action_btn.set_size_request(88, 32)
+        action_btn.set_size_request(80, 30)
         action_btn.set_valign(Gtk.Align.CENTER)
         action_btn.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
 
@@ -2250,12 +2398,11 @@ class MacHeroCarousel(Gtk.Overlay):
                 return
             nl = s_id.strip().lower()
             rn = getattr(pm, "resolve_installed_pkg_name", lambda x: x)(nl).lower() if pm else nl
-            with getattr(pm, "_lock", threading.Lock()):
-                up_l = getattr(pm, "upgradable_list", [])
-                upg = any(
-                    (u.get("name") or "").strip().lower() in (nl, rn, f"{nl}-bin")
-                    for u in up_l
-                )
+            up_l = list(getattr(pm, "upgradable_list", []) or [])
+            upg = any(
+                (u.get("name") or "").strip().lower() in (nl, rn, f"{nl}-bin")
+                for u in up_l
+            )
             if upg:
                 self.aura_window._update_single_package(s_id, s_src)
                 return
@@ -2289,6 +2436,7 @@ class MacHeroCarousel(Gtk.Overlay):
 
         icon_box = Gtk.Box()
         icon_box.add_css_class("mac-hero-squircle")
+        icon_box.set_homogeneous(True)
         icon_box.set_size_request(88, 88)
         icon_box.set_valign(Gtk.Align.CENTER)
         icon_box.set_halign(Gtk.Align.CENTER)
@@ -2298,8 +2446,6 @@ class MacHeroCarousel(Gtk.Overlay):
         icon_img = create_scaled_image(icon_target, size=76)
         icon_img.set_halign(Gtk.Align.CENTER)
         icon_img.set_valign(Gtk.Align.CENTER)
-        icon_img.set_hexpand(True)
-        icon_img.set_vexpand(True)
         icon_box.append(icon_img)
 
         right_col.append(icon_box)
@@ -2330,6 +2476,9 @@ class MacHeroCarousel(Gtk.Overlay):
     def _jump_to_slide(self, index: int):
         if not self.slides or index < 0 or index >= len(self.slides) or index == self.current_idx:
             return
+        trans = Gtk.StackTransitionType.SLIDE_LEFT if index > self.current_idx else Gtk.StackTransitionType.SLIDE_RIGHT
+        self.stack.set_transition_type(trans)
+        self.stack.set_transition_duration(320)
         self.current_idx = index
         self.stack.set_visible_child_name(f"slide_{index}")
         self._update_dots()
@@ -2337,6 +2486,8 @@ class MacHeroCarousel(Gtk.Overlay):
     def _next_slide(self):
         if not self.slides:
             return
+        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT)
+        self.stack.set_transition_duration(320)
         new_idx = (self.current_idx + 1) % len(self.slides)
         self.current_idx = new_idx
         self.stack.set_visible_child_name(f"slide_{new_idx}")
@@ -2345,6 +2496,8 @@ class MacHeroCarousel(Gtk.Overlay):
     def _prev_slide(self):
         if not self.slides:
             return
+        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
+        self.stack.set_transition_duration(320)
         new_idx = (self.current_idx - 1) % len(self.slides)
         self.current_idx = new_idx
         self.stack.set_visible_child_name(f"slide_{new_idx}")
@@ -2397,6 +2550,9 @@ class AuraWindow(Adw.ApplicationWindow):
         # State tracking
         self.current_filter = "native"
         self.active_request_id = 0
+        self._detail_request_id = 0
+        self._saved_scroll_positions: Dict[str, float] = {}
+        self._cache_row_widgets: Dict[str, Gtk.Box] = {}
         self._search_timer_id: Optional[int] = None
         self._search_sync_lock: bool = False
         self._previous_page = "discover"
@@ -2436,15 +2592,16 @@ class AuraWindow(Adw.ApplicationWindow):
         # Header Bar (Back button, Refresh, Status)
         self.header_bar = self._build_headerbar()
 
-        # Content Main Page Stack - Non-homogeneous so pages never force layout constraints on each other
+        # Content Main Page Stack - Non-homogeneous with overflow protection so pages never clip headerbar
         self.main_stack = Gtk.Stack()
         self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.main_stack.set_transition_duration(180)
+        self.main_stack.set_transition_duration(220)
         self.main_stack.set_hexpand(True)
         self.main_stack.set_vexpand(True)
         self.main_stack.set_hhomogeneous(False)
         self.main_stack.set_vhomogeneous(False)
-        self.main_stack.set_interpolate_size(True)
+        self.main_stack.set_interpolate_size(False)
+        self.main_stack.set_overflow(Gtk.Overflow.HIDDEN)
 
         # Page 1: Discover (Top Showcase Carousel + Curated 2-Column Sections)
         self.discover_page = self._build_discover_page()
@@ -2482,6 +2639,14 @@ class AuraWindow(Adw.ApplicationWindow):
         self.storage_page = self._build_storage_page()
         self.main_stack.add_named(self.storage_page, "storage")
 
+        # Page 10: .deb Package Installer & Bridge
+        self.deb_page = self._build_deb_page()
+        self.main_stack.add_named(self.deb_page, "deb")
+
+        # Page 11: Hyprland Hub & Compositor Tools
+        self.hyprland_page = self._build_hyprland_page()
+        self.main_stack.add_named(self.hyprland_page, "hyprland")
+
         # 1. Left Sidebar
         self.sidebar = self._build_sidebar()
         self.main_layout.append(self.sidebar)
@@ -2490,6 +2655,7 @@ class AuraWindow(Adw.ApplicationWindow):
         content_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         content_col.set_hexpand(True)
         content_col.set_vexpand(True)
+        content_col.set_overflow(Gtk.Overflow.HIDDEN)
         content_col.append(self.header_bar)
         content_col.append(self.main_stack)
         self.main_layout.append(content_col)
@@ -2529,6 +2695,14 @@ class AuraWindow(Adw.ApplicationWindow):
         key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         key_ctrl.connect("key-pressed", self._on_window_key_pressed)
         self.add_controller(key_ctrl)
+
+        # Global Drag-and-Drop Controller for .deb files
+        try:
+            drop_target = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+            drop_target.connect("drop", self._on_window_file_dropped)
+            self.add_controller(drop_target)
+        except Exception:
+            pass
 
         # Initial Background Load of package database
         self._load_data_async()
@@ -2610,6 +2784,14 @@ class AuraWindow(Adw.ApplicationWindow):
             return bool(hasattr(self.pm, "snap_mgr") and self.pm.snap_mgr.is_snap_installed(name))
         elif source in ("docker", "container"):
             return bool(hasattr(self.pm, "container_mgr") and self.pm.container_mgr.is_app_installed(name))
+        elif source == "deb":
+            if str(name).lower().endswith(".deb") and hasattr(self.pm, "deb_mgr"):
+                try:
+                    info = self.pm.deb_mgr.inspect_deb(name)
+                    return bool(self.pm.is_installed(info["name"]))
+                except Exception:
+                    return False
+            return bool(hasattr(self.pm, "is_installed") and self.pm.is_installed(name))
         else:
             return bool(hasattr(self.pm, "is_installed") and self.pm.is_installed(name))
 
@@ -2659,17 +2841,15 @@ class AuraWindow(Adw.ApplicationWindow):
             btn.set_sensitive(False)
             return
 
-        # 4. Check upgradable status with alias resolution
+        # 4. Check upgradable status with alias resolution (lock-free read on UI thread)
         btn.remove_css_class("mac-btn-queued")
         name_low = name.strip().lower()
         res_name = getattr(self.pm, "resolve_installed_pkg_name", lambda x: x)(name_low).lower()
-        is_upgradable = False
-        with getattr(self.pm, "_lock", threading.Lock()):
-            upg_list = getattr(self.pm, "upgradable_list", [])
-            is_upgradable = any(
-                (u.get("name") or "").strip().lower() in (name_low, res_name, f"{name_low}-bin")
-                for u in upg_list
-            )
+        upg_list = list(getattr(self.pm, "upgradable_list", []) or [])
+        is_upgradable = any(
+            (u.get("name") or "").strip().lower() in (name_low, res_name, f"{name_low}-bin")
+            for u in upg_list
+        )
 
         if is_upgradable:
             btn.set_label("UPDATE")
@@ -2696,6 +2876,10 @@ class AuraWindow(Adw.ApplicationWindow):
                 btn.add_css_class("mac-btn-get")
             btn.set_sensitive(True)
 
+    def _animate_card_entrance(self, card: Gtk.Widget, index: int = 0):
+        """Zero-stutter card readiness hook (hardware-accelerated via parent Gtk.Stack transition)."""
+        return
+
     def _sync_all_cards(self):
         """Dynamically refresh action button states across all registered grids and cards when background tasks update."""
         self._snap_curated_dirty = True
@@ -2707,8 +2891,11 @@ class AuraWindow(Adw.ApplicationWindow):
             while child:
                 card = child.get_child() if hasattr(child, "get_child") else None
                 if card and hasattr(card, "_pkg_name") and hasattr(card, "_action_btn"):
-                    self._sync_card_widget_state(card)
-                    synced_cards.add(id(card))
+                    try:
+                        self._sync_card_widget_state(card)
+                        synced_cards.add(id(card))
+                    except Exception:
+                        pass
                 child = child.get_next_sibling()
 
         # 2. Sync through direct card registry (for hero carousel, custom views, etc.)
@@ -2716,10 +2903,13 @@ class AuraWindow(Adw.ApplicationWindow):
             for pkg_k, card_list in list(self._registered_cards.items()):
                 valid_cards = []
                 for card in card_list:
-                    if id(card) not in synced_cards:
-                        self._sync_card_widget_state(card)
-                        synced_cards.add(id(card))
-                    valid_cards.append(card)
+                    try:
+                        if id(card) not in synced_cards:
+                            self._sync_card_widget_state(card)
+                            synced_cards.add(id(card))
+                        valid_cards.append(card)
+                    except Exception:
+                        pass
                 self._registered_cards[pkg_k] = valid_cards
 
         # 3. Synchronize detail page if open
@@ -2917,28 +3107,23 @@ class AuraWindow(Adw.ApplicationWindow):
         curr = self.main_stack.get_visible_child_name()
         if curr in ("containers", "docker") and hasattr(self, "container_search_entry"):
             target_entry = self.container_search_entry
-            target_handler = getattr(self, "_on_container_search_changed", None)
         elif curr == "snap" and hasattr(self, "snap_search_entry"):
             target_entry = self.snap_search_entry
-            target_handler = getattr(self, "_on_snap_search_changed", None)
         elif curr == "installed" and hasattr(self, "installed_search_entry"):
             target_entry = self.installed_search_entry
-            target_handler = getattr(self, "_on_installed_search_changed", None)
         else:
             if curr != "browse":
+                self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+                self.main_stack.set_transition_duration(180)
                 self.main_stack.set_visible_child_name("browse")
-                self.header_title.set_text("")
-            self._hide_sidebar_search()
-            target_entry = getattr(self, "browse_search_entry", None)
-            target_handler = getattr(self, "_on_browse_search_changed", None)
+                self.header_title.set_text("Search Results")
+            target_entry = getattr(self, "browse_search_entry", None) or getattr(self, "search_entry", None)
 
         if target_entry:
             target_entry.grab_focus()
             cur_text = target_entry.get_text()
             target_entry.set_text(cur_text + ch)
             target_entry.set_position(-1)
-            if target_handler:
-                target_handler(target_entry)
 
     def _activate_search_entry(self):
         curr = self.main_stack.get_visible_child_name()
@@ -2950,10 +3135,11 @@ class AuraWindow(Adw.ApplicationWindow):
             target_entry = self.installed_search_entry
         else:
             if curr != "browse":
+                self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+                self.main_stack.set_transition_duration(180)
                 self.main_stack.set_visible_child_name("browse")
-                self.header_title.set_text("")
-            self._hide_sidebar_search()
-            target_entry = getattr(self, "browse_search_entry", None)
+                self.header_title.set_text("Search Results")
+            target_entry = getattr(self, "browse_search_entry", None) or getattr(self, "search_entry", None)
 
         if target_entry:
             target_entry.grab_focus()
@@ -2980,13 +3166,19 @@ class AuraWindow(Adw.ApplicationWindow):
         # App Brand Header (Squircle icon + Aura Store + Package Hub subtitle)
         brand_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         brand_box.add_css_class("mac-brand-box")
-        brand_box.set_valign(Gtk.Align.CENTER)
+        brand_box.set_valign(Gtk.Align.START)
+        brand_box.set_halign(Gtk.Align.START)
+        brand_box.set_hexpand(False)
+        brand_box.set_vexpand(False)
 
         brand_logo_box = Gtk.Box()
         brand_logo_box.add_css_class("mac-brand-logo-squircle")
         brand_logo_box.set_size_request(36, 36)
+        brand_logo_box.set_homogeneous(True)
         brand_logo_box.set_halign(Gtk.Align.CENTER)
         brand_logo_box.set_valign(Gtk.Align.CENTER)
+        brand_logo_box.set_hexpand(False)
+        brand_logo_box.set_vexpand(False)
         icon_candidates = [
             os.path.join(APP_DIR, "aura-icon.svg"),
             os.path.join(os.path.expanduser("~"), ".local", "share", "aura", "aura-icon.svg"),
@@ -2994,8 +3186,6 @@ class AuraWindow(Adw.ApplicationWindow):
         ]
         found_icon = next((p for p in icon_candidates if os.path.exists(p)), "aura-icon")
         brand_logo_img = create_scaled_image(found_icon, size=36)
-        brand_logo_img.set_halign(Gtk.Align.CENTER)
-        brand_logo_img.set_valign(Gtk.Align.CENTER)
         brand_logo_box.append(brand_logo_img)
         brand_box.append(brand_logo_box)
 
@@ -3014,17 +3204,19 @@ class AuraWindow(Adw.ApplicationWindow):
         brand_box.append(brand_text_box)
         sidebar.append(brand_box)
 
-        # Search Entry in Sidebar — acts as a one-shot activator to the browse page
+        # Search Entry in Sidebar — persistent, synchronized live search bar
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.add_css_class("mac-sidebar-search")
-        self.search_entry.set_placeholder_text("Search")
+        self.search_entry.set_placeholder_text("Search packages & apps...")
+        self.search_entry.connect("changed", self._on_sidebar_search_activate)
         self.search_entry.connect("search-changed", self._on_sidebar_search_activate)
+        self.search_entry.connect("stop-search", lambda e: e.set_text(""))
         sidebar.append(self.search_entry)
 
-        # Scrolled Sidebar Navigation
+        # Scrolled Sidebar Navigation (EXTERNAL policy hides scrollbar track completely while preserving wheel scroll)
         scrolled = Gtk.ScrolledWindow()
         scrolled.set_vexpand(True)
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.EXTERNAL)
 
         nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
 
@@ -3039,6 +3231,8 @@ class AuraWindow(Adw.ApplicationWindow):
                 ("categories", "Categories", "view-app-grid-symbolic"),
             ]),
             ("ECOSYSTEM", [
+                ("deb", ".deb Installer", "package-x-generic-symbolic"),
+                ("hyprland", "Hyprland Hub", "preferences-desktop-display-symbolic"),
                 ("docker", "Docker Apps", "application-x-addon-symbolic"),
                 ("snap", "Snap Store", "package-x-generic-symbolic"),
             ]),
@@ -3131,22 +3325,41 @@ class AuraWindow(Adw.ApplicationWindow):
     def _on_sidebar_channel_click(self, key: str):
         if not getattr(self, "_sidebar_ready", False):
             return
+        now = time.monotonic()
+        last_key, last_t = getattr(self, "_last_nav_event", ("", 0.0))
+        target_stack_map = {
+            "discover": "discover",
+            "categories": "category",
+            "category": "category",
+            "docker": "docker",
+            "containers": "docker",
+            "snap": "snap",
+            "updates": "updates",
+            "installed": "installed",
+            "storage": "storage",
+            "maintenance": "storage",
+            "deb": "deb",
+            "hyprland": "hyprland",
+        }
+        expected_page = target_stack_map.get(key, key)
+        if key == last_key and (now - last_t) < 0.08 and self.main_stack.get_visible_child_name() == expected_page:
+            return
+        self._last_nav_event = (key, now)
+
         self.set_focus(None)
         self.back_btn.set_visible(False)
         self._previous_page = key
 
-        # Restore sidebar search visibility when leaving browse page
+        # Keep sidebar search visible and clear search entries synchronously under lock
         self._show_sidebar_search()
-
-        # Silently clear all search entries without triggering signal loops
-        if self.search_entry.get_text():
-            self.search_entry.handler_block_by_func(self._on_sidebar_search_activate)
-            self.search_entry.set_text("")
-            self.search_entry.handler_unblock_by_func(self._on_sidebar_search_activate)
-        if hasattr(self, "browse_search_entry") and self.browse_search_entry.get_text():
-            self.browse_search_entry.handler_block_by_func(self._on_browse_search_changed)
-            self.browse_search_entry.set_text("")
-            self.browse_search_entry.handler_unblock_by_func(self._on_browse_search_changed)
+        self._search_sync_lock = True
+        try:
+            if hasattr(self, "search_entry") and self.search_entry.get_text():
+                self.search_entry.set_text("")
+            if hasattr(self, "browse_search_entry") and self.browse_search_entry.get_text():
+                self.browse_search_entry.set_text("")
+        finally:
+            self._search_sync_lock = False
 
         # Clear redundant header bar title so page title is prominent
         self.header_title.set_text("")
@@ -3185,6 +3398,16 @@ class AuraWindow(Adw.ApplicationWindow):
             self.main_stack.set_transition_duration(180)
             self.main_stack.set_visible_child_name("storage")
             self._load_storage_view()
+        elif key == "deb":
+            self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+            self.main_stack.set_transition_duration(180)
+            self.main_stack.set_visible_child_name("deb")
+            self._load_deb_view()
+        elif key == "hyprland":
+            self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+            self.main_stack.set_transition_duration(180)
+            self.main_stack.set_visible_child_name("hyprland")
+            self._load_hyprland_view()
 
     def _make_sidebar_nav_handler(self, key: str):
         def _handler(button: Gtk.ToggleButton):
@@ -3212,6 +3435,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
     def _open_category(self, cat_id: str, cat_title: str = ""):
         """Opens dedicated Category page with 100% working curated packages."""
+        self._save_current_scroll_position()
         self.set_focus(None)
         self._previous_page = "discover"
         self.back_btn.set_visible(True)
@@ -3229,11 +3453,16 @@ class AuraWindow(Adw.ApplicationWindow):
         subtitle = cat_obj.get("subtitle", "Curated high-performance software") if cat_obj else "Curated applications"
         self.cat_page_subtitle.set_text(subtitle)
 
-        # Highlight sidebar button
-        if "categories" in self.sidebar_buttons:
-            self.sidebar_buttons["categories"].set_active(True)
-        elif "category" in self.sidebar_buttons:
-            self.sidebar_buttons["category"].set_active(True)
+        # Highlight sidebar button without re-triggering _on_sidebar_channel_click
+        prev_ready = getattr(self, "_sidebar_ready", True)
+        self._sidebar_ready = False
+        try:
+            if "categories" in self.sidebar_buttons and self.sidebar_buttons["categories"]:
+                self.sidebar_buttons["categories"].set_active(True)
+            elif "category" in self.sidebar_buttons and self.sidebar_buttons["category"]:
+                self.sidebar_buttons["category"].set_active(True)
+        finally:
+            self._sidebar_ready = prev_ready
 
         # Highlight category pill
         if cat_obj and hasattr(self, "category_pill_buttons"):
@@ -3241,10 +3470,10 @@ class AuraWindow(Adw.ApplicationWindow):
             if cid in self.category_pill_buttons:
                 self.category_pill_buttons[cid].set_active(True)
 
-        # Populate Category Grid
+        # Populate Category Grid with staggered entrance animation
         self.cat_flow_box.remove_all()
         if cat_obj and "apps" in cat_obj:
-            for app_meta in cat_obj["apps"]:
+            for idx, app_meta in enumerate(cat_obj["apps"]):
                 card = self._create_mac_app_row(
                     app_meta["name"],
                     app_meta.get("desc", ""),
@@ -3253,6 +3482,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 )
                 card.add_css_class("mac-category-card")
                 self.cat_flow_box.append(card)
+                self._animate_card_entrance(card, idx)
 
         self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.main_stack.set_transition_duration(180)
@@ -3491,23 +3721,24 @@ class AuraWindow(Adw.ApplicationWindow):
         status_box.append(status_lbl)
         box.append(status_box)
 
-        entry = None
+        pwd_lbl = Gtk.Label(
+            label="Administrator Password (to remove sudoers policy):" if is_cfg else "Administrator Password:"
+        )
+        pwd_lbl.set_halign(Gtk.Align.START)
+        pwd_lbl.add_css_class("mac-stat-label")
+        box.append(pwd_lbl)
+
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+        entry.set_hexpand(True)
+        box.append(entry)
+
         if is_cfg:
             dialog.add_response("cancel", "Cancel")
             dialog.add_response("disable", "Disable Passwordless Mode")
             dialog.set_response_appearance("disable", Adw.ResponseAppearance.DESTRUCTIVE)
-            dialog.set_default_response("cancel")
+            dialog.set_default_response("disable")
         else:
-            pwd_lbl = Gtk.Label(label="Administrator Password:")
-            pwd_lbl.set_halign(Gtk.Align.START)
-            pwd_lbl.add_css_class("mac-stat-label")
-            box.append(pwd_lbl)
-
-            entry = Gtk.PasswordEntry()
-            entry.set_show_peek_icon(True)
-            entry.set_hexpand(True)
-            box.append(entry)
-
             dialog.add_response("cancel", "Cancel")
             dialog.add_response("enable", "Enable Passwordless Mode")
             dialog.set_response_appearance("enable", Adw.ResponseAppearance.SUGGESTED)
@@ -3518,7 +3749,8 @@ class AuraWindow(Adw.ApplicationWindow):
 
         def on_response(dlg, resp):
             if resp == "disable":
-                success, msg = self.pm.remove_passwordless()
+                pwd = entry.get_text().strip() if entry is not None else ""
+                success, msg = self.pm.remove_passwordless(password=pwd if pwd else None)
                 self.show_toast(msg)
                 self._update_auth_btn_status()
             elif resp == "enable":
@@ -3535,24 +3767,85 @@ class AuraWindow(Adw.ApplicationWindow):
         dialog.connect("response", on_response)
         dialog.present(self)
 
+    def _get_page_scrolled_window(self, page_name: str) -> Optional[Gtk.ScrolledWindow]:
+        page_map = {
+            "discover": getattr(self, "discover_page", None),
+            "browse": getattr(self, "browse_page", None),
+            "updates": getattr(self, "updates_page", None),
+            "installed": getattr(self, "installed_page", None),
+            "detail": getattr(self, "detail_page", None),
+            "category": getattr(self, "category_page", None),
+            "categories": getattr(self, "category_page", None),
+            "docker": getattr(self, "containers_page", None),
+            "containers": getattr(self, "containers_page", None),
+            "snap": getattr(self, "snap_page", None),
+            "storage": getattr(self, "storage_page", None),
+            "deb": getattr(self, "deb_page", None),
+            "hyprland": getattr(self, "hyprland_page", None),
+        }
+        w = page_map.get(page_name)
+        return w if isinstance(w, Gtk.ScrolledWindow) else None
+
+    def _save_current_scroll_position(self):
+        curr = self.main_stack.get_visible_child_name()
+        if not curr or curr == "detail":
+            return
+        sw = self._get_page_scrolled_window(curr)
+        if sw and sw.get_vadjustment():
+            self._saved_scroll_positions[curr] = sw.get_vadjustment().get_value()
+
+    def _restore_scroll_position(self, page_name: str):
+        saved_val = self._saved_scroll_positions.get(page_name)
+        if saved_val is None:
+            return
+        sw = self._get_page_scrolled_window(page_name)
+        if not sw:
+            return
+        def _apply_scroll():
+            self.set_focus(None)
+            vadj = sw.get_vadjustment()
+            if vadj and vadj.get_upper() >= saved_val:
+                vadj.set_value(saved_val)
+            return False
+        _apply_scroll()
+        GLib.idle_add(_apply_scroll)
+        GLib.timeout_add(35, _apply_scroll)
+
     def _navigate_back(self):
-        self.back_btn.set_visible(False)
+        target_page = getattr(self, "_previous_page", "discover") or "discover"
+        # If we are in 'category', back goes to 'discover'; if in 'detail', back goes to _previous_page
+        curr_page = self.main_stack.get_visible_child_name()
+        if curr_page == "category":
+            target_page = "discover"
+            self.back_btn.set_visible(False)
+        else:
+            # If returning from detail to category, keep back_btn visible so user can still go back to discover!
+            self.back_btn.set_visible(target_page == "category")
+
+        self.set_focus(None)
         self.main_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_RIGHT)
         self.main_stack.set_transition_duration(180)
-        self.main_stack.set_visible_child_name(self._previous_page)
-        if self._previous_page == "browse":
+        self.main_stack.set_visible_child_name(target_page)
+
+        if target_page == "browse":
             self.header_title.set_text("Search Results")
-            # Keep sidebar search hidden if browse has active query
-            if hasattr(self, "browse_search_entry") and self.browse_search_entry.get_text().strip():
-                self._hide_sidebar_search()
-            else:
-                self._show_sidebar_search()
+            self._show_sidebar_search()
         else:
             self.header_title.set_text("")
             self._show_sidebar_search()
-            target_btn = self.sidebar_buttons.get(self._previous_page, self.sidebar_buttons.get("discover"))
-            if target_btn:
-                target_btn.set_active(True)
+            # Synchronize active sidebar toggle button WITHOUT firing _on_sidebar_channel_click (preserves scroll & view!)
+            target_btn = self.sidebar_buttons.get(target_page, self.sidebar_buttons.get("discover"))
+            if target_btn and not target_btn.get_active():
+                prev_ready = getattr(self, "_sidebar_ready", True)
+                self._sidebar_ready = False
+                try:
+                    target_btn.set_active(True)
+                finally:
+                    self._sidebar_ready = prev_ready
+
+        # Sync card action buttons in-place without destroying FlowBox children
+        self._sync_all_cards()
+        self._restore_scroll_position(target_page)
 
     # =========================================================================
     # Page 1: Discover View (Spotlight Showcase Banners + 3-Column Grid)
@@ -3672,6 +3965,7 @@ class AuraWindow(Adw.ApplicationWindow):
         self.browse_search_entry.add_css_class("mac-search-glass-bar")
         self.browse_search_entry.set_placeholder_text("Search packages, apps, libraries...")
         self.browse_search_entry.set_hexpand(True)
+        self.browse_search_entry.connect("changed", self._on_browse_search_changed)
         self.browse_search_entry.connect("search-changed", self._on_browse_search_changed)
         self.browse_search_entry.connect("stop-search", self._on_browse_stop_search)
         search_bar_box.append(self.browse_search_entry)
@@ -3990,7 +4284,7 @@ class AuraWindow(Adw.ApplicationWindow):
             self.sidebar_updates_badge.set_visible(rem_count > 0 if is_updating else True)
             self.btn_update_all.set_sensitive(not is_updating)
 
-            for u in upgrades:
+            for idx, u in enumerate(upgrades):
                 name = u["name"]
                 pkg = self.pm.packages.get(name, {})
                 desc = pkg.get("desc", "System software update")
@@ -4006,6 +4300,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 if hasattr(card, "_action_btn"):
                     self._updates_buttons[name] = card._action_btn
                 self.updates_flow_box.append(card)
+                self._animate_card_entrance(card, idx)
 
             if is_updating:
                 self._sync_updates_ui_state()
@@ -4213,7 +4508,7 @@ class AuraWindow(Adw.ApplicationWindow):
             # Populate flow box if not cached
             if self._cached_installed_apps_flow is None:
                 self.installed_flow_box.remove_all()
-                for a in apps:
+                for idx, a in enumerate(apps):
                     card = self._create_mac_app_row(
                         a["name"],
                         a.get("desc", ""),
@@ -4223,6 +4518,7 @@ class AuraWindow(Adw.ApplicationWindow):
                         icon_override=a.get("icon", "")
                     )
                     self.installed_flow_box.append(card)
+                    self._animate_card_entrance(card, idx)
                 self._cached_installed_apps_flow = self.installed_flow_box
 
             # Apply active filter
@@ -4403,6 +4699,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
         c_icon_box = Gtk.Box()
         c_icon_box.add_css_class("mac-brand-logo-squircle")
+        c_icon_box.set_homogeneous(True)
         c_icon_box.set_size_request(56, 56)
         c_icon_box.set_halign(Gtk.Align.CENTER)
         c_icon_box.set_valign(Gtk.Align.CENTER)
@@ -4595,9 +4892,10 @@ class AuraWindow(Adw.ApplicationWindow):
                     else:
                         self.container_status_lbl.set_text("Isolated container apps powered by Docker")
                 self.containers_flow_box.remove_all()
-                for a in apps:
+                for idx, a in enumerate(apps):
                     card = self._create_container_app_card(a)
                     self.containers_flow_box.append(card)
+                    self._animate_card_entrance(card, idx)
             GLib.idle_add(_ui)
 
         threading.Thread(target=_bg, daemon=True).start()
@@ -4609,7 +4907,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
         def _bg():
             ok, msg = self.pm.container_mgr.ensure_container_configured(
-                progress_callback=lambda s: GLib.idle_add(lambda: self.show_toast(s))
+                progress_callback=lambda s: GLib.idle_add(lambda: self.container_desc_lbl.set_text(str(s)))
             )
             def _ui():
                 btn.set_sensitive(True)
@@ -4717,6 +5015,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
         icon_box = Gtk.Box()
         icon_box.add_css_class("mac-squircle")
+        icon_box.set_homogeneous(True)
         icon_box.set_valign(Gtk.Align.CENTER)
         icon_box.set_halign(Gtk.Align.CENTER)
         icon_box.set_size_request(54, 54)
@@ -4726,8 +5025,6 @@ class AuraWindow(Adw.ApplicationWindow):
         img = create_scaled_image(icon_target, size=40)
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_hexpand(True)
-        img.set_vexpand(True)
         icon_box.append(img)
         card.append(icon_box)
 
@@ -4830,39 +5127,35 @@ class AuraWindow(Adw.ApplicationWindow):
         return card
 
     def _confirm_container_install(self, app_id: str, app_name: str, button: Gtk.Button):
-        dlg = Adw.AlertDialog.new(
-            f"Install {app_name} via Docker?",
-            f"This will install {app_name} inside the isolated 'aura-box' Docker container.\nA desktop shortcut will automatically be created in your application menu."
-        )
-        dlg.add_response("cancel", "Cancel")
-        dlg.add_response("install", "Install")
-        dlg.set_response_appearance("install", Adw.ResponseAppearance.SUGGESTED)
-        dlg.set_default_response("install")
-        dlg.set_close_response("cancel")
-        def _on_response(d, resp):
-            if resp == "install":
-                self._execute_container_install(app_id, app_name, button)
-        dlg.connect("response", _on_response)
-        dlg.present(self)
+        # Direct 1-click install into isolated aura-box container without blocking modal dialog
+        self._execute_container_install(app_id, app_name, button)
 
-    def _execute_container_install(self, app_id: str, app_name: str, button: Gtk.Button):
-        button.set_sensitive(False)
-        button.set_label("INSTALLING...")
-        self.show_toast(f"Preparing container & installing {app_name}...")
-        self._load_containers_view(self.container_search_entry.get_text())
+    def _execute_container_install(self, app_id: str, app_name: str, button: Optional[Gtk.Button]):
+        if self.pm.container_mgr.is_app_installing(app_id):
+            return
+        if button:
+            button.set_sensitive(False)
+            button.set_label("INSTALLING...")
+        self._start_smooth_progress("install", app_id, display_name=app_name, source="docker", target_view="detail")
 
         def _progress(msg):
-            GLib.idle_add(lambda: self.show_toast(msg))
+            GLib.idle_add(lambda: self._on_progress_update(0.55, str(msg), pkg_name=app_id))
 
         def _completion(ok, msg):
             def _ui():
+                self._finish_smooth_progress(ok, "install", app_id, "" if ok else str(msg))
                 self.show_toast(msg)
-                self._load_containers_view(self.container_search_entry.get_text())
+                self.pm.refresh_installed()
+                self._cached_installed_apps_flow = None
+                if hasattr(self, "sidebar_installed_badge"):
+                    self.sidebar_installed_badge.set_text(str(len(self.pm.get_installed_desktop_apps())))
+                self._load_containers_view(self.container_search_entry.get_text(), update_status=False)
+                self._sync_all_cards()
             GLib.idle_add(_ui)
 
         self.pm.container_mgr.install_app(app_id, progress_callback=_progress, completion_callback=_completion)
 
-    def _confirm_container_uninstall(self, app_id: str, app_name: str, button: Gtk.Button):
+    def _confirm_container_uninstall(self, app_id: str, app_name: str, button: Optional[Gtk.Button]):
         dlg = Adw.AlertDialog.new(
             f"Uninstall {app_name}?",
             f"Are you sure you want to uninstall {app_name}?\nThis will remove the desktop shortcut and clean up container files."
@@ -4878,17 +5171,27 @@ class AuraWindow(Adw.ApplicationWindow):
         dlg.connect("response", _on_response)
         dlg.present(self)
 
-    def _execute_container_uninstall(self, app_id: str, app_name: str, button: Gtk.Button):
-        button.set_sensitive(False)
-        self.show_toast(f"Removing {app_name} and desktop shortcut...")
+    def _execute_container_uninstall(self, app_id: str, app_name: str, button: Optional[Gtk.Button]):
+        if button:
+            button.set_sensitive(False)
+        self._start_smooth_progress("remove", app_id, display_name=app_name, source="docker", target_view="detail")
 
         def _progress(msg):
-            GLib.idle_add(lambda: self.show_toast(msg))
+            GLib.idle_add(lambda: self._on_progress_update(0.6, str(msg), pkg_name=app_id))
 
         def _completion(ok, msg):
             def _ui():
+                self._finish_smooth_progress(ok, "remove", app_id, "" if ok else str(msg))
                 self.show_toast(msg)
-                self._load_containers_view(self.container_search_entry.get_text())
+                self.pm.refresh_installed()
+                self._cached_installed_apps_flow = None
+                if hasattr(self, "sidebar_installed_badge"):
+                    self.sidebar_installed_badge.set_text(str(len(self.pm.get_installed_desktop_apps())))
+                if self.main_stack.get_visible_child_name() == "installed":
+                    self._load_installed_view()
+                else:
+                    self._load_containers_view(self.container_search_entry.get_text(), update_status=False)
+                self._sync_all_cards()
             GLib.idle_add(_ui)
 
         self.pm.container_mgr.uninstall_app(app_id, progress_callback=_progress, completion_callback=_completion)
@@ -4933,6 +5236,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
         snap_logo_box = Gtk.Box()
         snap_logo_box.add_css_class("mac-brand-logo-squircle")
+        snap_logo_box.set_homogeneous(True)
         snap_logo_box.set_size_request(56, 56)
         snap_logo_box.set_halign(Gtk.Align.CENTER)
         snap_logo_box.set_valign(Gtk.Align.CENTER)
@@ -5164,7 +5468,7 @@ class AuraWindow(Adw.ApplicationWindow):
         self.show_toast("Configuring Canonical Snap service in background...")
 
         def _prog(frac, msg):
-            GLib.idle_add(lambda: self.show_toast(msg))
+            GLib.idle_add(lambda: self.snap_desc_lbl.set_text(str(msg)))
 
         def _done(ok, msg):
             def _ui():
@@ -5196,7 +5500,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 self.show_toast("Disabling snapd...")
                 self.pm.snap_mgr.disable_snapd(
                     purge_packages=purge,
-                    progress_callback=lambda f, m: GLib.idle_add(lambda: self.show_toast(m)),
+                    progress_callback=lambda f, m: GLib.idle_add(lambda: self.snap_desc_lbl.set_text(str(m))),
                     completion_callback=lambda ok, m: GLib.idle_add(lambda: (setattr(self, "_snap_curated_dirty", True), self.show_toast(m), self._load_snap_view(force_refresh=True)))
                 )
 
@@ -5288,6 +5592,7 @@ class AuraWindow(Adw.ApplicationWindow):
         # 1. 54x54 Squircle App Icon
         icon_box = Gtk.Box()
         icon_box.add_css_class("mac-squircle")
+        icon_box.set_homogeneous(True)
         icon_box.set_valign(Gtk.Align.CENTER)
         icon_box.set_halign(Gtk.Align.CENTER)
         icon_box.set_size_request(54, 54)
@@ -5298,8 +5603,6 @@ class AuraWindow(Adw.ApplicationWindow):
         img = create_scaled_image(icon_target, size=40)
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_hexpand(True)
-        img.set_vexpand(True)
         icon_box.append(img)
         card.append(icon_box)
 
@@ -5369,7 +5672,7 @@ class AuraWindow(Adw.ApplicationWindow):
         action_btn.set_halign(Gtk.Align.END)
         action_btn.set_hexpand(False)
         action_btn.set_vexpand(False)
-        action_btn.set_size_request(88, 32)
+        action_btn.set_size_request(80, 30)
         action_btn.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
         card.append(action_btn)
 
@@ -5635,6 +5938,16 @@ class AuraWindow(Adw.ApplicationWindow):
         self.cache_action_buttons: Dict[str, Gtk.Button] = {}
         box.append(self.cache_rows_box)
 
+        # 5. System Health & Pacman Doctor Section
+        doctor_label = Gtk.Label(label="System Health & Pacman Doctor")
+        doctor_label.add_css_class("mac-section-header")
+        doctor_label.set_halign(Gtk.Align.START)
+        doctor_label.set_margin_top(14)
+        box.append(doctor_label)
+
+        self.doctor_rows_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.append(self.doctor_rows_box)
+
         clamp = Adw.Clamp()
         clamp.set_maximum_size(860)
         clamp.set_tightening_threshold(640)
@@ -5650,8 +5963,10 @@ class AuraWindow(Adw.ApplicationWindow):
 
         def _bg():
             data = self.pm.cache_mgr.scan_all_caches()
+            health = self.pm.doctor_mgr.scan_health() if hasattr(self.pm, "doctor_mgr") else {}
             def _ui():
                 self._update_storage_ui(data)
+                self._update_doctor_ui(health)
             GLib.idle_add(_ui)
 
         threading.Thread(target=_bg, daemon=True).start()
@@ -5700,90 +6015,119 @@ class AuraWindow(Adw.ApplicationWindow):
         self.seg_journal.set_size_request(_calc_px(journal_info.get("reclaimable_bytes", 0)), 16)
         self.seg_aura.set_size_request(_calc_px(aura_info.get("reclaimable_bytes", 0)), 16)
 
-        # Populate cache rows
-        while (child := self.cache_rows_box.get_first_child()):
-            self.cache_rows_box.remove(child)
+        # Update existing cache rows in-place (zero icon reload / zero flicker!), or build once on first load
+        if not hasattr(self, "_cache_row_widgets"):
+            self._cache_row_widgets = {}
         for key, cat_data in cats.items():
-            row = self._create_cache_category_row(key, cat_data)
-            self.cache_rows_box.append(row)
+            existing_row = self._cache_row_widgets.get(key)
+            if existing_row is not None and existing_row.get_parent() == self.cache_rows_box:
+                rec_str = cat_data.get("reclaimable_str", "0 B")
+                tot_str = cat_data.get("total_str", "0 B")
+                rec_bytes = cat_data.get("reclaimable_bytes", 0)
+                if hasattr(existing_row, "_size_lbl"):
+                    existing_row._size_lbl.set_text(f"{rec_str} Reclaimable")
+                if hasattr(existing_row, "_tot_lbl"):
+                    existing_row._tot_lbl.set_text(f"{tot_str} on disk")
+                if hasattr(existing_row, "_btn_clean"):
+                    existing_row._btn_clean.set_label("Clean")
+                    existing_row._btn_clean.set_sensitive(rec_bytes > 0)
+            else:
+                row = self._create_cache_category_row(key, cat_data)
+                self._cache_row_widgets[key] = row
+                self.cache_rows_box.append(row)
 
     def _create_cache_category_row(self, key: str, cat_data: Dict[str, Any]) -> Gtk.Box:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         row.add_css_class("mac-cache-row")
         row.set_valign(Gtk.Align.CENTER)
+        row.set_hexpand(True)
 
-        # Checkbox
+        # Checkbox (Fixed column 1)
         chk = Gtk.CheckButton()
         chk.set_active(True)
         chk.set_valign(Gtk.Align.CENTER)
+        chk.set_hexpand(False)
         self.cache_checkboxes[key] = chk
         row.append(chk)
 
-        # Icon Squircle
+        # Icon Squircle (Fixed column 2: 44x44 homogeneous dead-centered)
         icon_box = Gtk.Box()
-        icon_box.add_css_class("mac-brand-logo-squircle")
-        icon_box.set_size_request(42, 42)
+        icon_box.add_css_class("mac-squircle")
+        icon_box.set_size_request(44, 44)
+        icon_box.set_homogeneous(True)
+        icon_box.set_homogeneous(True)
         icon_box.set_halign(Gtk.Align.CENTER)
         icon_box.set_valign(Gtk.Align.CENTER)
+        icon_box.set_hexpand(False)
+        icon_box.set_vexpand(False)
         icon_name = cat_data.get("icon", "drive-harddisk-symbolic")
-        icon_img = create_scaled_image(icon_name, size=24)
+        icon_img = create_scaled_image(icon_name, size=22)
         icon_box.append(icon_img)
         row.append(icon_box)
 
-        # Details
+        # Details (Expanding column 3: strictly left-aligned at exact X coordinate)
         info_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         info_col.set_hexpand(True)
+        info_col.set_halign(Gtk.Align.FILL)
         info_col.set_valign(Gtk.Align.CENTER)
 
         title_lbl = Gtk.Label(label=cat_data.get("name", key.capitalize()))
         title_lbl.add_css_class("mac-app-title")
-        title_lbl.set_halign(Gtk.Align.START)
+        title_lbl.set_halign(Gtk.Align.FILL)
+        title_lbl.set_xalign(0.0)
+        title_lbl.set_hexpand(True)
         title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        title_lbl.set_max_width_chars(25)
         info_col.append(title_lbl)
 
         desc_lbl = Gtk.Label(label=cat_data.get("desc", ""))
         desc_lbl.add_css_class("mac-app-desc")
-        desc_lbl.set_halign(Gtk.Align.START)
+        desc_lbl.set_halign(Gtk.Align.FILL)
+        desc_lbl.set_xalign(0.0)
+        desc_lbl.set_hexpand(True)
         desc_lbl.set_wrap(True)
         desc_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         desc_lbl.set_lines(2)
-        desc_lbl.set_max_width_chars(38)
+        desc_lbl.set_max_width_chars(36)
         desc_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         info_col.append(desc_lbl)
         row.append(info_col)
 
-        # Size Label
+        # Size Label (Fixed column 4: 155px right-aligned, never truncates '43.0 MB Reclaimable')
         size_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         size_col.set_valign(Gtk.Align.CENTER)
-        size_col.set_margin_end(12)
+        size_col.set_halign(Gtk.Align.END)
+        size_col.set_hexpand(False)
+        size_col.set_size_request(155, -1)
+        size_col.set_margin_end(6)
 
         rec_str = cat_data.get("reclaimable_str", "0 B")
         tot_str = cat_data.get("total_str", "0 B")
         size_lbl = Gtk.Label(label=f"{rec_str} Reclaimable")
         size_lbl.add_css_class("mac-app-title")
         size_lbl.set_halign(Gtk.Align.END)
-        size_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        size_lbl.set_max_width_chars(20)
+        size_lbl.set_xalign(1.0)
         size_col.append(size_lbl)
 
         tot_lbl = Gtk.Label(label=f"{tot_str} on disk")
         tot_lbl.add_css_class("dim-label")
         tot_lbl.set_halign(Gtk.Align.END)
-        tot_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        tot_lbl.set_max_width_chars(20)
+        tot_lbl.set_xalign(1.0)
         size_col.append(tot_lbl)
         row.append(size_col)
 
-        # Prune Button
+        # Prune Button (Fixed column 5: 96x32)
         rec_bytes = cat_data.get("reclaimable_bytes", 0)
         btn_clean = Gtk.Button(label="Clean")
         btn_clean.add_css_class("mac-btn-get")
         btn_clean.set_valign(Gtk.Align.CENTER)
-        btn_clean.set_size_request(86, 32)
+        btn_clean.set_hexpand(False)
+        btn_clean.set_size_request(96, 32)
         btn_clean.set_sensitive(rec_bytes > 0)
         btn_clean.connect("clicked", lambda b, k=key: self._on_clean_single_cache_click(b, k))
         self.cache_action_buttons[key] = btn_clean
+        row._size_lbl = size_lbl
+        row._tot_lbl = tot_lbl
+        row._btn_clean = btn_clean
         row.append(btn_clean)
 
         return row
@@ -5796,10 +6140,12 @@ class AuraWindow(Adw.ApplicationWindow):
 
         btn.set_sensitive(False)
         btn.set_label("Cleaning...")
-        self.show_toast(f"Cleaning selected caches ({', '.join(selected_cats)})...")
 
         def _prog(frac, msg):
-            GLib.idle_add(lambda: self.show_toast(msg))
+            def _ui_p():
+                if frac < 1.0 and msg:
+                    btn.set_label(msg[:22])
+            GLib.idle_add(_ui_p)
 
         def _done(ok, msg):
             def _ui():
@@ -5812,10 +6158,9 @@ class AuraWindow(Adw.ApplicationWindow):
     def _on_clean_single_cache_click(self, btn: Gtk.Button, cache_key: str):
         btn.set_sensitive(False)
         btn.set_label("Cleaning...")
-        self.show_toast(f"Cleaning {cache_key} cache...")
 
         def _prog(frac, msg):
-            GLib.idle_add(lambda: self.show_toast(msg))
+            return
 
         def _done(ok, msg):
             def _ui():
@@ -5852,6 +6197,7 @@ class AuraWindow(Adw.ApplicationWindow):
         # 88x88 Squircle Icon Container
         self.detail_icon_box = Gtk.Box()
         self.detail_icon_box.add_css_class("mac-detail-icon-squircle")
+        self.detail_icon_box.set_homogeneous(True)
         self.detail_icon_box.set_valign(Gtk.Align.CENTER)
         self.detail_icon_box.set_halign(Gtk.Align.CENTER)
         self.detail_icon_box.set_size_request(88, 88)
@@ -5955,6 +6301,28 @@ class AuraWindow(Adw.ApplicationWindow):
         self.progress_bar.add_css_class("mac-capsule-progress")
         self.progress_bar.set_fraction(0.0)
         self.progress_container.append(self.progress_bar)
+
+        # Expandable Live Terminal Output Drawer inside Progress Card
+        self.progress_log_expander = Gtk.Expander(label="View Live Package Manager Output")
+        self.progress_log_expander.add_css_class("dim-label")
+        self.progress_log_expander.set_margin_top(4)
+
+        log_scroll = Gtk.ScrolledWindow()
+        log_scroll.set_min_content_height(95)
+        log_scroll.set_max_content_height(150)
+        log_scroll.add_css_class("mac-log-terminal-box")
+
+        self.progress_log_label = Gtk.Label(label="Waiting for package manager stream...")
+        self.progress_log_label.add_css_class("mac-log-text")
+        self.progress_log_label.set_halign(Gtk.Align.START)
+        self.progress_log_label.set_valign(Gtk.Align.START)
+        self.progress_log_label.set_xalign(0.0)
+        self.progress_log_label.set_selectable(True)
+        self.progress_log_label.set_wrap(True)
+        self.progress_log_label.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        log_scroll.set_child(self.progress_log_label)
+        self.progress_log_expander.set_child(log_scroll)
+        self.progress_container.append(self.progress_log_expander)
 
         box.append(self.progress_container)
 
@@ -6214,6 +6582,7 @@ class AuraWindow(Adw.ApplicationWindow):
 
         icon_box = Gtk.Box()
         icon_box.add_css_class("mac-squircle")
+        icon_box.set_homogeneous(True)
         icon_box.set_valign(Gtk.Align.CENTER)
         icon_box.set_halign(Gtk.Align.CENTER)
         icon_box.set_size_request(54, 54)
@@ -6224,14 +6593,13 @@ class AuraWindow(Adw.ApplicationWindow):
         img = create_scaled_image(icon_target, size=40)
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_hexpand(True)
-        img.set_vexpand(True)
         icon_box.append(img)
         card.append(icon_box)
 
-        # 2. Text Column (App Name + Subtitle / Category - Multi-line without premature cut-offs)
+        # 2. Text Column (Full-width App Title + Clean Subtitle with inline source tag)
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         vbox.set_hexpand(True)
+        vbox.set_halign(Gtk.Align.FILL)
         vbox.set_valign(Gtk.Align.CENTER)
 
         title_lbl = Gtk.Label(label=display_title)
@@ -6240,12 +6608,23 @@ class AuraWindow(Adw.ApplicationWindow):
         title_lbl.set_xalign(0.0)
         title_lbl.set_hexpand(True)
         title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        title_lbl.set_tooltip_text(display_title)
         vbox.append(title_lbl)
 
+        src_low = (source or "pacman").lower()
+        src_prefix_map = {
+            "aur": "AUR • ",
+            "deb": ".DEB • ",
+            "snap": "Snap • ",
+            "docker": "Docker • ",
+        }
+        src_prefix = src_prefix_map.get(src_low, "")
+
         if update_info:
-            sub_text = f"{desc} • {update_info.get('old_ver', '')} → {update_info.get('new_ver', '')}" if desc else f"{update_info.get('old_ver', '')} → {update_info.get('new_ver', '')}"
+            base_sub = f"{desc} • {update_info.get('old_ver', '')} → {update_info.get('new_ver', '')}" if desc else f"{update_info.get('old_ver', '')} → {update_info.get('new_ver', '')}"
         else:
-            sub_text = desc if desc else ("Desktop application" if source == "pacman" else "Community package")
+            base_sub = desc if desc else ("Desktop application" if source == "pacman" else "Community package")
+        sub_text = f"{src_prefix}{base_sub}" 
 
         desc_lbl = Gtk.Label(label=sub_text)
         desc_lbl.set_halign(Gtk.Align.FILL)
@@ -6271,13 +6650,11 @@ class AuraWindow(Adw.ApplicationWindow):
         is_installing = bool(hasattr(self.pm, "is_pkg_installing") and self.pm.is_pkg_installing(name))
         is_queued = bool(hasattr(self.pm, "is_pkg_queued") and self.pm.is_pkg_queued(name))
 
-        is_upgradable = False
-        with getattr(self.pm, "_lock", threading.Lock()):
-            upg_list = getattr(self.pm, "upgradable_list", [])
-            is_upgradable = any(
-                (u.get("name") or "").strip().lower() in (name_lower, res_name, f"{name_lower}-bin")
-                for u in upg_list
-            )
+        upg_list = list(getattr(self.pm, "upgradable_list", []) or [])
+        is_upgradable = any(
+            (u.get("name") or "").strip().lower() in (name_lower, res_name, f"{name_lower}-bin")
+            for u in upg_list
+        )
 
         if update_info:
             active_tx = self.pm.get_active_transaction() if hasattr(self.pm, "get_active_transaction") else None
@@ -6340,12 +6717,11 @@ class AuraWindow(Adw.ApplicationWindow):
             # Dynamic check for upgradable status
             nl = n.strip().lower()
             rn = getattr(self.pm, "resolve_installed_pkg_name", lambda x: x)(nl).lower()
-            with getattr(self.pm, "_lock", threading.Lock()):
-                up_l = getattr(self.pm, "upgradable_list", [])
-                upg = any(
-                    (u.get("name") or "").strip().lower() in (nl, rn, f"{nl}-bin")
-                    for u in up_l
-                )
+            up_l = list(getattr(self.pm, "upgradable_list", []) or [])
+            upg = any(
+                (u.get("name") or "").strip().lower() in (nl, rn, f"{nl}-bin")
+                for u in up_l
+            )
             if upg:
                 self._update_single_package(n, s)
                 return
@@ -6360,15 +6736,42 @@ class AuraWindow(Adw.ApplicationWindow):
 
         action_btn.connect("clicked", _on_card_action_clicked)
 
+        actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        actions_box.set_valign(Gtk.Align.CENTER)
+        actions_box.set_halign(Gtk.Align.END)
+        actions_box.set_hexpand(False)
+        actions_box.set_vexpand(False)
+
         action_btn.set_valign(Gtk.Align.CENTER)
         action_btn.set_halign(Gtk.Align.END)
         action_btn.set_hexpand(False)
         action_btn.set_vexpand(False)
-        action_btn.set_size_request(88, 32)
+        action_btn.set_size_request(72, 28)
         action_btn.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
-        card.append(action_btn)
+        actions_box.append(action_btn)
+
+        # Direct Uninstall / Clean Uninstall button on Installed page cards
+        trash_btn = None
+        if is_installed_view and not update_info:
+            trash_btn = Gtk.Button()
+            trash_btn.add_css_class("mac-btn-trash")
+            trash_icon = Gtk.Image.new_from_icon_name("user-trash-symbolic")
+            trash_icon.set_pixel_size(13)
+            trash_btn.set_child(trash_icon)
+            trash_btn.set_size_request(28, 28)
+            trash_btn.set_valign(Gtk.Align.CENTER)
+            trash_btn.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+            trash_btn.set_tooltip_text(f"Uninstall {display_title} (with Clean Data option)")
+            trash_btn.connect(
+                "clicked",
+                lambda b, n=name, s=source, dt=display_title: self._confirm_package_uninstall(n, s, dt)
+            )
+            actions_box.append(trash_btn)
+
+        card.append(actions_box)
 
         card._action_btn = action_btn
+        card._trash_btn = trash_btn
         card._pkg_name = name
         card._source = source
         card._update_info = update_info
@@ -6382,13 +6785,13 @@ class AuraWindow(Adw.ApplicationWindow):
             if res_name != name_lower:
                 self._registered_cards.setdefault(res_name, []).append(card)
 
-        # Card Gesture Click opens full-page inspector (ignoring clicks on action_btn)
+        # Card Gesture Click opens full-page inspector (ignoring clicks inside actions_box)
         gesture = Gtk.GestureClick()
         def _on_card_click(g, n_press, x, y, n=name, s=source):
             picked = card.pick(x, y, Gtk.PickFlags.INSENSITIVE)
-            if picked is not None and (picked == action_btn or action_btn.is_ancestor(picked)):
+            if picked is not None and (picked == actions_box or actions_box.is_ancestor(picked)):
                 return
-            alloc = action_btn.compute_bounds(card)
+            alloc = actions_box.compute_bounds(card)
             if alloc[0]:
                 rect = alloc[1]
                 rx, ry = rect.get_x(), rect.get_y()
@@ -6416,16 +6819,15 @@ class AuraWindow(Adw.ApplicationWindow):
         img = create_scaled_image(icon, size=64)
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
-        img.set_hexpand(True)
-        img.set_vexpand(True)
         self.detail_icon_img = img
         self.detail_icon_box.append(img)
 
     def _open_package_detail(self, name: str, source: str):
-        """Open the full-page package inspector with zero stale data flash."""
+        """Open the full-page package inspector with zero stale data flash and preserved scroll offset."""
+        self._save_current_scroll_position()
         self.set_focus(None)
-        self.active_request_id += 1
-        req_id = self.active_request_id
+        self._detail_request_id = getattr(self, "_detail_request_id", 0) + 1
+        req_id = self._detail_request_id
 
         self.back_btn.set_visible(True)
         self.header_title.set_text("")
@@ -6437,12 +6839,16 @@ class AuraWindow(Adw.ApplicationWindow):
 
         # If locally installed via pacman/AUR, ensure source correctly reflects native pacman or aur
         # unless explicitly opened from the Snap Store page
-        if self.pm.is_installed(name) and not is_from_snap_page and source != "docker":
-            if name in self.pm.packages or self.pm.packages.get(name):
+        if self.pm.is_installed(name) and not is_from_snap_page and source not in ("docker", "deb"):
+            pkg_entry = self.pm.packages.get(name)
+            if pkg_entry and pkg_entry.get("repo") not in ("local", "deb-local", "aur"):
                 source = "pacman"
+            elif pkg_entry and pkg_entry.get("source") == "deb":
+                source = "deb"
             else:
                 clean = re.sub(r'-(bin|git|hg|svn|pure|gtk-app|qt-app|gui|cli|daemon|desktop|launcher)$', '', name.lower())
-                if clean in self.pm.packages:
+                clean_entry = self.pm.packages.get(clean)
+                if clean_entry and clean_entry.get("repo") not in ("local", "deb-local", "aur"):
                     source = "pacman"
                 else:
                     source = "aur"
@@ -6457,11 +6863,14 @@ class AuraWindow(Adw.ApplicationWindow):
             self.detail_page.get_vadjustment().set_value(0)
 
         def _bg():
-            if source == "snap":
-                detail = self._get_snap_detail(name)
-            else:
-                detail = self.pm.get_package_detail(name, source)
-            if req_id == self.active_request_id:
+            try:
+                if source == "snap":
+                    detail = self._get_snap_detail(name)
+                else:
+                    detail = self.pm.get_package_detail(name, source)
+            except Exception as e:
+                detail = {"name": name, "source": source, "desc": f"Package details ({e})"}
+            if req_id == getattr(self, "_detail_request_id", 0):
                 GLib.idle_add(lambda: self._render_detail_page(detail))
         threading.Thread(target=_bg, daemon=True).start()
 
@@ -6474,6 +6883,9 @@ class AuraWindow(Adw.ApplicationWindow):
         if source == "snap":
             repo_name = "Canonical Snap Store"
             self.detail_meta.set_text(f"{name} • {repo_name} • Sandboxed Package")
+        elif source == "deb":
+            repo_name = "Debian (.deb) Native Bridge"
+            self.detail_meta.set_text(f"{name} • {repo_name} • Pacman Tracked")
         elif source == "pacman":
             repo_name = "Official System Repository"
             self.detail_meta.set_text(f"{name} • {repo_name} • Free & Open Source")
@@ -6485,11 +6897,32 @@ class AuraWindow(Adw.ApplicationWindow):
         icon_name = resolve_icon_name(name, "")
         self._set_detail_icon(icon_name)
 
-        # Reset Quick Stats to clean dashes
-        self.stat_val_dev.set_text("—")
-        self.stat_val_source.set_text("Canonical" if source == "snap" else ("Official" if source == "pacman" else "AUR"))
-        self.stat_val_version.set_text("—")
-        self.stat_val_size.set_text("—")
+        # Immediately pre-fill known metadata from in-memory caches so user never waits on network/CLI
+        known_dev = "Open Source Community"
+        known_ver = "latest"
+        known_size = "—"
+        known_desc = ""
+        if source == "snap":
+            cur_s = next((s for s in CURATED_SNAPS if s.get("name", "").lower() == name.lower()), None)
+            if not cur_s and hasattr(self.pm, "snap_mgr"):
+                cur_s = next((s for s in getattr(self.pm.snap_mgr, "CURATED_SNAP_APPS", []) if s.get("name", "").lower() == name.lower()), None)
+            if cur_s:
+                known_dev = cur_s.get("publisher") or cur_s.get("developer") or "Canonical"
+                known_ver = cur_s.get("version", "stable")
+                known_desc = cur_s.get("desc") or cur_s.get("summary") or ""
+                known_size = "Sandboxed Snap"
+        elif name in self.pm.packages:
+            p_raw = self.pm.packages[name]
+            known_dev = re.sub(r'<[^>]*>', '', str(p_raw.get("packager") or "Arch Linux")).strip() or "Arch Linux"
+            known_ver = p_raw.get("version") or self.pm.installed_versions.get(name, "latest")
+            known_desc = p_raw.get("desc", "")
+        if known_desc:
+            self.detail_subtitle.set_text(known_desc)
+
+        self.stat_val_dev.set_text(known_dev)
+        self.stat_val_source.set_text("Snap Store" if source == "snap" else ("Official" if source == "pacman" else "AUR"))
+        self.stat_val_version.set_text(f"v{known_ver}" if known_ver and not str(known_ver).startswith("v") else str(known_ver))
+        self.stat_val_size.set_text(known_size)
         # License stat was moved to Information card
 
         # Hide action buttons during load
@@ -6563,6 +6996,8 @@ class AuraWindow(Adw.ApplicationWindow):
         self.detail_subtitle.set_text(desc)
         if source == "snap":
             repo_text = "Canonical Snap Store"
+        elif source == "deb":
+            repo_text = "Debian (.deb) Native Bridge"
         elif source == "pacman":
             repo_text = "Official System Repository"
         else:
@@ -6575,6 +7010,8 @@ class AuraWindow(Adw.ApplicationWindow):
         self.stat_val_dev.set_text(dev_clean)
         if source == "snap":
             repo_clean = "Snap Store"
+        elif source == "deb":
+            repo_clean = ".deb Bridge"
         elif source == "pacman":
             repo_clean = f"Official · {repo}"
         else:
@@ -6745,12 +7182,15 @@ class AuraWindow(Adw.ApplicationWindow):
         if deps:
             self.detail_deps_box.set_visible(True)
             for dep in deps[:20]:
-                dep_clean = dep.split(">=")[0].split("<=")[0].split("=")[0].strip()
-                dep_pill = Gtk.Label(label=dep_clean)
-                dep_pill.add_css_class("mac-dep-tag")
-                dep_pill.set_halign(Gtk.Align.START)
-                dep_pill.set_hexpand(False)
-                self.detail_deps_flow.append(dep_pill)
+                dep_clean = dep.split(">=")[0].split("<=")[0].split("=")[0].split(":")[0].strip()
+                dep_btn = Gtk.Button(label=dep_clean)
+                dep_btn.add_css_class("mac-dep-tag")
+                dep_btn.set_halign(Gtk.Align.START)
+                dep_btn.set_hexpand(False)
+                dep_btn.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+                dep_btn.set_tooltip_text(f"Inspect dependency package '{dep_clean}'")
+                dep_btn.connect("clicked", lambda b, dn=dep_clean: self._open_package_detail(dn, self.pm.resolve_package_source(dn)))
+                self.detail_deps_flow.append(dep_btn)
             if len(deps) > 20:
                 more_pill = Gtk.Label(label=f"+{len(deps) - 20} more")
                 more_pill.add_css_class("mac-dep-tag")
@@ -6761,7 +7201,14 @@ class AuraWindow(Adw.ApplicationWindow):
             self.detail_deps_box.set_visible(False)
 
         # Specifications Table
-        spec_repo = f"Official · {repo}" if source == "pacman" else "Community Repository (AUR)"
+        if source == "pacman":
+            spec_repo = f"Official · {repo}"
+        elif source == "deb":
+            spec_repo = "Debian (.deb) Native Bridge"
+        elif source == "snap":
+            spec_repo = "Canonical Snap Store"
+        else:
+            spec_repo = "Community Repository (AUR)"
         if hasattr(self, "info_val_repo"):
             self.info_val_repo.set_text(spec_repo)
             self.info_val_arch.set_text(d.get("arch", "x86_64"))
@@ -6804,81 +7251,82 @@ class AuraWindow(Adw.ApplicationWindow):
         return _handler
 
     def _show_sidebar_search(self):
-        """Restore the sidebar search entry visibility."""
+        """Keep the sidebar search entry always visible."""
         if hasattr(self, "search_entry"):
             self.search_entry.set_visible(True)
 
     def _hide_sidebar_search(self):
-        """Hide the sidebar search entry when browse page big search is active."""
+        """Keep the sidebar search entry visible to prevent Wayland IMContext focus crashes."""
         if hasattr(self, "search_entry"):
-            self.search_entry.set_visible(False)
+            self.search_entry.set_visible(True)
 
     def _on_sidebar_search_activate(self, entry: Gtk.SearchEntry):
-        """Sidebar search activator: switch to browse, hide sidebar search, focus big search."""
+        """Sidebar live search handler: synchronizes with browse_search_entry without hiding or stealing focus."""
+        if getattr(self, "_search_sync_lock", False):
+            return
         raw = entry.get_text()
 
-        # Container page isolation — forward to container search
         curr = self.main_stack.get_visible_child_name()
         if curr in ("containers", "docker") and hasattr(self, "container_search_entry"):
-            self.container_search_entry.set_text(raw)
+            if self.container_search_entry.get_text() != raw:
+                self.container_search_entry.set_text(raw)
             return
-        # Snap page isolation — forward to snap search
         if curr == "snap" and hasattr(self, "snap_search_entry"):
-            self.snap_search_entry.set_text(raw)
+            if self.snap_search_entry.get_text() != raw:
+                self.snap_search_entry.set_text(raw)
             return
 
-        # Switch to browse page
-        if curr != "browse":
+        # Mirror text into browse_search_entry synchronously without recursive signal emission
+        self._search_sync_lock = True
+        try:
+            if hasattr(self, "browse_search_entry") and self.browse_search_entry.get_text() != raw:
+                self.browse_search_entry.set_text(raw)
+        finally:
+            self._search_sync_lock = False
+
+        q = raw.strip()
+        if q and curr != "browse":
             self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
             self.main_stack.set_transition_duration(180)
             self.main_stack.set_visible_child_name("browse")
             self.header_title.set_text("Search Results")
 
-        # Hide sidebar search, transfer text to big search bar
-        self._hide_sidebar_search()
-
-        if hasattr(self, "browse_search_entry"):
-            # Block browse handler during transfer to avoid double-fire
-            self.browse_search_entry.handler_block_by_func(self._on_browse_search_changed)
-            self.browse_search_entry.set_text(raw)
-            self.browse_search_entry.handler_unblock_by_func(self._on_browse_search_changed)
-            self.browse_search_entry.set_position(-1)
-            self.browse_search_entry.grab_focus()
-
-        # Clear sidebar entry silently
-        entry.handler_block_by_func(self._on_sidebar_search_activate)
-        entry.set_text("")
-        entry.handler_unblock_by_func(self._on_sidebar_search_activate)
-
-        # Trigger search for the transferred text
-        q = raw.strip()
-        if q:
-            if self._search_timer_id:
-                GLib.source_remove(self._search_timer_id)
-                self._search_timer_id = None
-            if hasattr(self, "browse_hero_card"):
-                self.browse_hero_card.set_visible(False)
-            if hasattr(self, "browse_results_container"):
-                self.browse_results_container.set_visible(True)
-            if hasattr(self, "browse_spinner"):
-                self.browse_spinner.set_visible(True)
-                self.browse_spinner.start()
-            if hasattr(self, "browse_status_label"):
-                self.browse_status_label.set_text(f"Searching for '{q}'...")
-                self.browse_status_label.add_css_class("mac-loading-shimmer")
-            self._search_timer_id = GLib.timeout_add(200, self._do_debounced_search, q)
+        self._schedule_live_search(q)
 
     def _on_browse_search_changed(self, entry: Gtk.SearchEntry):
-        """Primary search handler — only browse_search_entry triggers actual searches."""
-        q = entry.get_text().strip()
+        """Browse page search handler: synchronizes with sidebar search_entry and schedules search."""
+        if getattr(self, "_search_sync_lock", False):
+            return
+        raw = entry.get_text()
 
-        # Cancel any pending search
+        self._search_sync_lock = True
+        try:
+            if hasattr(self, "search_entry") and self.search_entry.get_text() != raw:
+                self.search_entry.set_text(raw)
+        finally:
+            self._search_sync_lock = False
+
+        q = raw.strip()
+        curr = self.main_stack.get_visible_child_name()
+        if q and curr != "browse":
+            self.main_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+            self.main_stack.set_transition_duration(180)
+            self.main_stack.set_visible_child_name("browse")
+            self.header_title.set_text("Search Results")
+
+        self._schedule_live_search(q)
+
+    def _schedule_live_search(self, q: str):
+        """Unified debounced search scheduler with signal deduplication."""
+        if q and q == getattr(self, "_last_scheduled_query", None) and self._search_timer_id is not None:
+            return
+        self._last_scheduled_query = q
+
         if self._search_timer_id:
             GLib.source_remove(self._search_timer_id)
             self._search_timer_id = None
 
         if not q:
-            # Empty query: show clean empty state, STAY on browse page
             self.active_request_id += 1
             if hasattr(self, "browse_spinner"):
                 self.browse_spinner.stop()
@@ -6894,7 +7342,6 @@ class AuraWindow(Adw.ApplicationWindow):
                 self.browse_flow_box.remove_all()
             return
 
-        # Non-empty query: hide hero, show loading with spinner, debounce search
         if hasattr(self, "browse_hero_card"):
             self.browse_hero_card.set_visible(False)
         if hasattr(self, "browse_results_container"):
@@ -6906,7 +7353,7 @@ class AuraWindow(Adw.ApplicationWindow):
             self.browse_status_label.set_text(f"Searching for '{q}'...")
             self.browse_status_label.add_css_class("mac-loading-shimmer")
 
-        self._search_timer_id = GLib.timeout_add(250, self._do_debounced_search, q)
+        self._search_timer_id = GLib.timeout_add(180, self._do_debounced_search, q)
 
     def _on_suggestion_chip_clicked(self, term: str):
         """Click handler for browse suggestions chips to quick-fill and execute search."""
@@ -6960,44 +7407,42 @@ class AuraWindow(Adw.ApplicationWindow):
         def _bg():
             filter_mode = self.current_filter
             results: List[Dict[str, Any]] = []
+            try:
+                if filter_mode == "docker":
+                    d_apps = self.pm.container_mgr.list_apps(query)
+                    for a in d_apps:
+                        results.append({"_card_type": "docker", "data": a})
+                elif filter_mode == "snap":
+                    seen = set()
+                    q_lower = query.lower()
+                    for s in CURATED_SNAPS:
+                        s_name = s.get("name", "")
+                        if s_name and (q_lower in s_name.lower() or q_lower in s.get("title", "").lower() or q_lower in s.get("summary", "").lower()):
+                            if s_name not in seen:
+                                seen.add(s_name)
+                                results.append({"_card_type": "snap", "data": dict(s)})
 
-            if filter_mode == "docker":
-                d_apps = self.pm.container_mgr.list_apps(query)
-                for a in d_apps:
-                    results.append({"_card_type": "docker", "data": a})
-            elif filter_mode == "snap":
-                # Real-time search across the entire Canonical Snap Store catalog
-                seen = set()
-                q_lower = query.lower()
-                for s in CURATED_SNAPS:
-                    s_name = s.get("name", "")
-                    if s_name and (q_lower in s_name.lower() or q_lower in s.get("title", "").lower() or q_lower in s.get("summary", "").lower()):
-                        if s_name not in seen:
-                            seen.add(s_name)
-                            results.append({"_card_type": "snap", "data": dict(s)})
-
-                try:
-                    if hasattr(self.pm, "snap_mgr") and callable(getattr(self.pm.snap_mgr, "search_snaps", None)):
-                        raw_snaps = self.pm.snap_mgr.search_snaps(query)
-                        if isinstance(raw_snaps, list):
-                            for s in raw_snaps[:60]:
-                                s_name = s.get("name")
-                                if s_name and s_name not in seen:
-                                    seen.add(s_name)
-                                    results.append({"_card_type": "snap", "data": s})
-                except Exception:
-                    pass
-            elif filter_mode in ("pacman", "aur"):
-                raw_pkgs = self.pm.search(query, source=filter_mode, limit=60)
-                for p in raw_pkgs:
-                    results.append({"_card_type": "pkg", "data": p})
-            else:
-                # filter_mode in ("native", "all"):
-                # STRICTLY search Arch Linux packages (Pacman & AUR).
-                # TOTALLY EXCLUDE Snap and Docker apps! Zero snaps, zero docker in normal search!
-                raw_pkgs = self.pm.search(query, source="all", limit=60)
-                for p in raw_pkgs:
-                    results.append({"_card_type": "pkg", "data": p})
+                    try:
+                        if hasattr(self.pm, "snap_mgr") and callable(getattr(self.pm.snap_mgr, "search_snaps", None)):
+                            raw_snaps = self.pm.snap_mgr.search_snaps(query)
+                            if isinstance(raw_snaps, list):
+                                for s in raw_snaps[:60]:
+                                    s_name = s.get("name")
+                                    if s_name and s_name not in seen:
+                                        seen.add(s_name)
+                                        results.append({"_card_type": "snap", "data": s})
+                    except Exception:
+                        pass
+                elif filter_mode in ("pacman", "aur"):
+                    raw_pkgs = self.pm.search(query, source=filter_mode, limit=60)
+                    for p in raw_pkgs:
+                        results.append({"_card_type": "pkg", "data": p})
+                else:
+                    raw_pkgs = self.pm.search(query, source="all", limit=60)
+                    for p in raw_pkgs:
+                        results.append({"_card_type": "pkg", "data": p})
+            except Exception as e:
+                print(f"[Aura] Search background error: {e}", file=sys.stderr)
 
             if req_id == self.active_request_id:
                 GLib.idle_add(lambda: self._display_search_results(query, results))
@@ -7006,75 +7451,89 @@ class AuraWindow(Adw.ApplicationWindow):
         return False
 
     def _display_search_results(self, query: str, results: List[Dict[str, Any]]):
-        # Stop and hide animated search spinner
-        if hasattr(self, "browse_spinner"):
-            self.browse_spinner.stop()
-            self.browse_spinner.set_visible(False)
+        try:
+            # Stop and hide animated search spinner
+            if hasattr(self, "browse_spinner"):
+                self.browse_spinner.stop()
+                self.browse_spinner.set_visible(False)
 
-        # Discard results if user cleared search in the meantime
-        current_text = ""
-        if hasattr(self, "browse_search_entry"):
-            current_text = self.browse_search_entry.get_text().strip()
-        if not current_text:
+            # Check current text from either browse_search_entry or sidebar search_entry
+            current_text = ""
+            if hasattr(self, "browse_search_entry"):
+                current_text = self.browse_search_entry.get_text().strip()
+            if not current_text and hasattr(self, "search_entry"):
+                current_text = self.search_entry.get_text().strip()
+
+            if not current_text and not query:
+                if hasattr(self, "browse_hero_card"):
+                    self.browse_hero_card.set_visible(True)
+                if hasattr(self, "browse_results_container"):
+                    self.browse_results_container.set_visible(False)
+                if hasattr(self, "browse_status_label"):
+                    self.browse_status_label.set_text("")
+                    self.browse_status_label.remove_css_class("mac-loading-shimmer")
+                if hasattr(self, "browse_flow_box"):
+                    self.browse_flow_box.remove_all()
+                return
+
             if hasattr(self, "browse_hero_card"):
-                self.browse_hero_card.set_visible(True)
+                self.browse_hero_card.set_visible(False)
             if hasattr(self, "browse_results_container"):
-                self.browse_results_container.set_visible(False)
-            if hasattr(self, "browse_status_label"):
-                self.browse_status_label.set_text("")
-                self.browse_status_label.remove_css_class("mac-loading-shimmer")
-            if hasattr(self, "browse_flow_box"):
-                self.browse_flow_box.remove_all()
-            return
+                self.browse_results_container.set_visible(True)
 
-        if hasattr(self, "browse_hero_card"):
-            self.browse_hero_card.set_visible(False)
-        if hasattr(self, "browse_results_container"):
-            self.browse_results_container.set_visible(True)
+            self.browse_status_label.remove_css_class("mac-loading-shimmer")
+            self.browse_flow_box.remove_all()
+            count = len(results)
 
-        self.browse_status_label.remove_css_class("mac-loading-shimmer")
-        self.browse_flow_box.remove_all()
-        count = len(results)
-
-        if self.current_filter == "snap":
-            scope = "Canonical Snap Store"
-        elif self.current_filter == "docker":
-            scope = "Docker App Sandbox"
-        else:
-            scope = "Arch Linux Repositories (Pacman & AUR)"
-
-        self.browse_status_label.set_text(f"Found {count} results for '{query}' in {scope}")
-
-        if count == 0:
-            empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            empty_box.set_margin_top(40)
-            empty_lbl = Gtk.Label(label=f"No packages found matching '{query}'. Try switching filter source or checking spelling.")
-            empty_lbl.add_css_class("dim-label")
-            empty_box.append(empty_lbl)
-            self.browse_flow_box.append(empty_box)
-            return
-
-        seen_keys = set()
-        for r in results:
-            card_type = r.get("_card_type", "pkg")
-            data = r.get("data", r)
-            item_key = (card_type, data.get("name", ""))
-            if item_key in seen_keys:
-                continue
-            seen_keys.add(item_key)
-            if card_type == "docker":
-                card = self._create_container_app_card(data)
-            elif card_type == "snap":
-                card = self._create_snap_app_card(data)
+            if self.current_filter == "snap":
+                scope = "Canonical Snap Store"
+            elif self.current_filter == "docker":
+                scope = "Docker App Sandbox"
             else:
-                card = self._create_mac_app_row(
-                    data.get("name", ""),
-                    data.get("desc", ""),
-                    data.get("source", "pacman"),
-                    title_override=data.get("display_name") or data.get("title", ""),
-                    icon_override=data.get("icon", "")
-                )
-            self.browse_flow_box.append(card)
+                scope = "Arch Linux Repositories (Pacman & AUR)"
+
+            self.browse_status_label.set_text(f"Found {count} results for '{query}' in {scope}")
+
+            if count == 0:
+                empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+                empty_box.set_margin_top(40)
+                empty_lbl = Gtk.Label(label=f"No packages found matching '{query}'. Try switching filter source or checking spelling.")
+                empty_lbl.add_css_class("dim-label")
+                empty_lbl.set_wrap(True)
+                empty_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+                empty_box.append(empty_lbl)
+                self.browse_flow_box.append(empty_box)
+                return
+
+            seen_keys = set()
+            idx = 0
+            for r in results:
+                try:
+                    card_type = r.get("_card_type", "pkg") if isinstance(r, dict) else "pkg"
+                    data = r.get("data", r) if isinstance(r, dict) else {}
+                    item_key = (card_type, data.get("name", ""))
+                    if not item_key[1] or item_key in seen_keys:
+                        continue
+                    seen_keys.add(item_key)
+                    if card_type == "docker":
+                        card = self._create_container_app_card(data)
+                    elif card_type == "snap":
+                        card = self._create_snap_app_card(data)
+                    else:
+                        card = self._create_mac_app_row(
+                            data.get("name", ""),
+                            data.get("desc", ""),
+                            data.get("source", "pacman"),
+                            title_override=data.get("display_name") or data.get("title", ""),
+                            icon_override=data.get("icon", "")
+                        )
+                    self.browse_flow_box.append(card)
+                    self._animate_card_entrance(card, idx)
+                    idx += 1
+                except Exception as card_err:
+                    print(f"[Aura] Error rendering search card: {card_err}", file=sys.stderr)
+        except Exception as e:
+            print(f"[Aura] Error displaying search results: {e}", file=sys.stderr)
 
     # =========================================================================
     # Install / Update / Remove Background Actions with Silky Smooth Progress Lerp
@@ -7087,21 +7546,17 @@ class AuraWindow(Adw.ApplicationWindow):
         source: str = "pacman",
         target_view: str = "detail"
     ):
-        """Initialize smooth state-tracked progress bar and header capsule."""
+        """Initialize smooth state-tracked progress bar and multi-engine header capsule."""
         if getattr(self, "_progress_auto_hide_id", None):
             GLib.source_remove(self._progress_auto_hide_id)
             self._progress_auto_hide_id = None
 
-        disp = display_name or get_app_display_name(pkg_name)
-        self._progress_action = action
-        self._progress_pkg_name = pkg_name
-        self._progress_display_name = disp
-        self._progress_source = source
-        self._progress_target_view = target_view
-        self._current_progress = 0.05
-        self._target_progress = 0.08
+        if not hasattr(self, "_active_ui_tasks"):
+            self._active_ui_tasks = {}
 
-        # Action-specific status label
+        disp = display_name or get_app_display_name(pkg_name)
+        key = (pkg_name or "system").strip().lower()
+
         if action == "install":
             st_text = f"Preparing to install {disp}..."
             pill_title = f"Installing {disp}"
@@ -7119,78 +7574,204 @@ class AuraWindow(Adw.ApplicationWindow):
             st_text = f"Working on {disp}..."
             pill_title = f"Processing {disp}"
 
-        self._progress_status_text = st_text
+        existing = self._active_ui_tasks.get(key)
+        if existing is None:
+            self._active_ui_tasks[key] = {
+                "action": action,
+                "pkg_name": pkg_name,
+                "display_name": disp,
+                "source": source,
+                "target_view": target_view,
+                "current": 0.05,
+                "target": 0.08,
+                "status": st_text,
+                "pill_title": pill_title,
+                "start_time": time.monotonic(),
+            }
+        else:
+            existing["action"] = action
+            existing["display_name"] = disp
+            existing["source"] = source
+            existing["target_view"] = target_view
+            existing["pill_title"] = pill_title
+
+        task = self._active_ui_tasks[key]
+        self._progress_action = action
+        self._progress_pkg_name = pkg_name
+        self._progress_display_name = disp
+        self._progress_source = source
+        self._progress_target_view = target_view
+        self._current_progress = task["current"]
+        self._target_progress = task["target"]
+        self._progress_status_text = task["status"]
 
         # 1. Floating Header Pill
         self.header_progress_pill.set_visible(True)
         self.header_progress_spinner.start()
-        self.header_progress_label.set_text(f"⟳ {pill_title} • 5%")
+        total_jobs = len(self._active_ui_tasks) + (self.pm.get_queue_length() if hasattr(self.pm, "get_queue_length") else 0)
+        extra_tag = f" (+{total_jobs - 1} more)" if total_jobs > 1 else ""
+        self.header_progress_label.set_text(f"⟳ {pill_title} • {int(task['current'] * 100)}%{extra_tag}")
 
         # 2. View specific containers
         if target_view == "detail":
-            self.progress_container.set_visible(True)
-            self.progress_bar.set_fraction(0.05)
-            self.progress_status_label.set_text(st_text)
-            self.progress_percent_label.set_text("5%")
-            self.btn_detail_install.set_sensitive(False)
-            self.btn_detail_install.set_label("INSTALLING..." if action == "install" else "WORKING...")
-            self.btn_detail_launch.set_visible(False)
+            if self._current_detail and (self._current_detail.get("name") or "").strip().lower() == key:
+                self.progress_container.set_visible(True)
+                self.progress_bar.set_fraction(task["current"])
+                self.progress_status_label.set_text(task["status"])
+                self.progress_percent_label.set_text(f"{int(task['current'] * 100)}%")
+                self.btn_detail_install.set_sensitive(False)
+                self.btn_detail_install.set_label("INSTALLING..." if action == "install" else "WORKING...")
+                self.btn_detail_launch.set_visible(False)
         elif target_view == "updates":
             self.updates_progress_box.set_visible(True)
-            self.updates_progress_bar.set_fraction(0.05)
-            self.updates_progress_lbl.set_text(st_text)
-            self.updates_percent_label.set_text("5%")
+            self.updates_progress_bar.set_fraction(task["current"])
+            self.updates_progress_lbl.set_text(task["status"])
+            self.updates_percent_label.set_text(f"{int(task['current'] * 100)}%")
             self.btn_update_all.set_sensitive(False)
 
         # 3. Start tick animation
-        if getattr(self, "_progress_anim_id", None):
-            GLib.source_remove(self._progress_anim_id)
-            self._progress_anim_id = None
-        self._progress_anim_id = GLib.timeout_add(16, self._on_progress_lerp_tick)
+        if not getattr(self, "_progress_anim_id", None):
+            self._progress_anim_id = GLib.timeout_add(16, self._on_progress_lerp_tick)
 
-    def _on_progress_update(self, frac: float, msg: str):
-        """Called asynchronously when pacman/paru outputs progress."""
+    def _on_progress_update(self, frac: float, msg: str, pkg_name: Optional[str] = None):
+        """Called asynchronously when any backend engine outputs progress."""
         def _apply():
-            # Ensure target never steps backwards
-            self._target_progress = max(self._target_progress, max(0.0, min(1.0, frac)))
-            if msg:
-                self._progress_status_text = msg
-                if self._progress_target_view == "detail" and self.progress_container.get_visible():
+            if not hasattr(self, "_active_ui_tasks"):
+                self._active_ui_tasks = {}
+            eff_pkg = pkg_name or self._progress_pkg_name or "system"
+            key = eff_pkg.strip().lower()
+            clamped = max(0.0, min(1.0, float(frac)))
+
+            task = self._active_ui_tasks.get(key)
+            if task is not None:
+                # If task is still active (frac < 1.0), never step backwards; also ignore stale 1.0 from another task
+                if clamped < 1.0 and task["target"] >= 1.0:
+                    task["target"] = max(0.08, clamped)
+                    task["current"] = min(task["current"], task["target"])
+                else:
+                    task["target"] = max(task["target"], clamped)
+                if msg:
+                    task["status"] = msg
+
+            # If this update belongs to the primary displayed task (or no primary task is set), sync legacy fields
+            if key == (self._progress_pkg_name or "").strip().lower() or not self._progress_pkg_name:
+                self._progress_pkg_name = eff_pkg
+                if task is not None:
+                    self._target_progress = task["target"]
+                    self._current_progress = task["current"]
+                else:
+                    self._target_progress = max(self._target_progress, clamped)
+                if msg:
+                    self._progress_status_text = msg
+
+            # Update Detail Page if currently open for this package
+            if self._current_detail and (self._current_detail.get("name") or "").strip().lower() == key:
+                if self.progress_container.get_visible() and msg:
                     self.progress_status_label.set_text(msg)
-                elif self._progress_target_view == "updates" and self.updates_progress_box.get_visible():
-                    self.updates_progress_lbl.set_text(msg)
-            # Ensure tick ticker is running
-            if not getattr(self, "_progress_anim_id", None) and self._current_progress < 1.0:
+                if hasattr(self, "progress_log_label"):
+                    active_tx = self.pm.get_active_transaction() if hasattr(self.pm, "get_active_transaction") else None
+                    if active_tx and active_tx.get("log_lines") and (active_tx.get("pkg_name") or "").strip().lower() == key:
+                        tail = "\n".join(active_tx["log_lines"][-12:])
+                        self.progress_log_label.set_text(tail)
+                    elif msg:
+                        self.progress_log_label.set_text(msg)
+
+            if self._progress_target_view == "updates" and self.updates_progress_box.get_visible() and msg:
+                self.updates_progress_lbl.set_text(msg)
+
+            if not getattr(self, "_progress_anim_id", None):
                 self._progress_anim_id = GLib.timeout_add(16, self._on_progress_lerp_tick)
 
-            # Sync update badges on updates view (lightweight)
             if self._progress_target_view == "updates" or (hasattr(self, "main_stack") and self.main_stack.get_visible_child_name() == "updates"):
                 self._sync_updates_ui_state()
         GLib.idle_add(_apply)
 
     def _on_progress_lerp_tick(self) -> bool:
-        """Smoothly interpolate current_fraction toward target_fraction at 60fps."""
-        diff = self._target_progress - self._current_progress
-        if abs(diff) < 0.0005:
-            self._current_progress = self._target_progress
-        else:
-            # Fluid physics glide (12% of delta per frame, minimum step 0.0025)
-            step = max(abs(diff) * 0.12, 0.0025)
-            if diff > 0:
-                self._current_progress = min(self._target_progress, self._current_progress + step)
+        """Smoothly interpolate current_fraction toward target_fraction at 60fps across all active tasks."""
+        if not hasattr(self, "_active_ui_tasks"):
+            self._active_ui_tasks = {}
+
+        # Auto-adopt active_transaction if backend popped a queued package into active_transaction
+        active_tx = self.pm.get_active_transaction() if hasattr(self.pm, "get_active_transaction") else None
+        if active_tx and not active_tx.get("is_completed"):
+            tx_pkg = (active_tx.get("pkg_name") or "").strip()
+            tx_key = tx_pkg.lower()
+            if tx_key and tx_key not in self._active_ui_tasks:
+                tx_act = active_tx.get("action", "install")
+                tx_src = active_tx.get("source", "pacman")
+                tx_disp = get_app_display_name(tx_pkg)
+                self._active_ui_tasks[tx_key] = {
+                    "action": tx_act,
+                    "pkg_name": tx_pkg,
+                    "display_name": tx_disp,
+                    "source": tx_src,
+                    "target_view": "updates" if tx_act in ("update", "upgrade") else "detail",
+                    "current": 0.05,
+                    "target": max(0.08, float(active_tx.get("progress", 0.06))),
+                    "status": str(active_tx.get("status_msg") or f"Installing {tx_disp}..."),
+                    "pill_title": f"Updating {tx_disp}" if tx_act in ("update", "upgrade") else f"Installing {tx_disp}",
+                    "start_time": time.monotonic(),
+                }
+            elif tx_key in self._active_ui_tasks:
+                t_ref = self._active_ui_tasks[tx_key]
+                bk_prog = float(active_tx.get("progress", 0.0))
+                if 0.0 < bk_prog < 1.0:
+                    t_ref["target"] = max(t_ref["target"], bk_prog)
+                bk_msg = active_tx.get("status_msg") or active_tx.get("status")
+                if bk_msg:
+                    t_ref["status"] = str(bk_msg)
+
+        # Interpolate every active task independently
+        for t_key, task in list(self._active_ui_tasks.items()):
+            diff = task["target"] - task["current"]
+            if abs(diff) < 0.0005:
+                task["current"] = task["target"]
             else:
-                self._current_progress = max(self._target_progress, self._current_progress - step)
+                step = max(abs(diff) * 0.12, 0.0025)
+                if diff > 0:
+                    task["current"] = min(task["target"], task["current"] + step)
+                else:
+                    task["current"] = max(task["target"], task["current"] - step)
+
+        # Sync primary progress task
+        prim_key = (self._progress_pkg_name or "").strip().lower()
+        prim_task = self._active_ui_tasks.get(prim_key)
+        if prim_task is None and self._active_ui_tasks:
+            prim_key, prim_task = next(iter(self._active_ui_tasks.items()))
+            self._progress_pkg_name = prim_task["pkg_name"]
+            self._progress_display_name = prim_task["display_name"]
+            self._progress_action = prim_task["action"]
+            self._progress_source = prim_task["source"]
+
+        if prim_task is not None:
+            self._current_progress = prim_task["current"]
+            self._target_progress = prim_task["target"]
+            self._progress_status_text = prim_task["status"]
+        else:
+            diff = self._target_progress - self._current_progress
+            if abs(diff) < 0.0005:
+                self._current_progress = self._target_progress
+            else:
+                step = max(abs(diff) * 0.12, 0.0025)
+                self._current_progress = min(self._target_progress, self._current_progress + step) if diff > 0 else max(self._target_progress, self._current_progress - step)
 
         cur = self._current_progress
         pct = int(cur * 100)
         pct_str = f"{pct}%"
 
-        # Update Detail page progress if visible and corresponding to active package
-        if hasattr(self, "progress_bar") and hasattr(self, "progress_container") and self.progress_container.get_visible():
-            if self._current_detail and self._current_detail.get("name") == self._progress_pkg_name:
-                self.progress_bar.set_fraction(cur)
+        # Update Detail page progress for whichever package is currently open on Detail page!
+        if hasattr(self, "progress_bar") and hasattr(self, "progress_container") and self._current_detail:
+            det_key = (self._current_detail.get("name") or "").strip().lower()
+            det_task = self._active_ui_tasks.get(det_key)
+            if det_task is not None:
+                if not self.progress_container.get_visible():
+                    self.progress_container.set_visible(True)
+                det_cur = det_task["current"]
+                self.progress_bar.set_fraction(det_cur)
                 if hasattr(self, "progress_percent_label"):
-                    self.progress_percent_label.set_text(pct_str)
+                    self.progress_percent_label.set_text(f"{int(det_cur * 100)}%")
+                if hasattr(self, "progress_status_label") and det_task.get("status"):
+                    self.progress_status_label.set_text(det_task["status"])
 
         # Update Updates page progress if visible
         if hasattr(self, "updates_progress_bar") and hasattr(self, "updates_progress_box") and self.updates_progress_box.get_visible():
@@ -7212,36 +7793,30 @@ class AuraWindow(Adw.ApplicationWindow):
                     pill_title = f"Updating {disp}"
             else:
                 pill_title = f"Processing {disp}"
+            total_jobs = len(self._active_ui_tasks) + (self.pm.get_queue_length() if hasattr(self.pm, "get_queue_length") else 0)
+            extra_tag = f" (+{total_jobs - 1} more)" if total_jobs > 1 else ""
             if hasattr(self, "header_progress_label"):
-                self.header_progress_label.set_text(f"⟳ {pill_title} • {pct_str}")
+                self.header_progress_label.set_text(f"⟳ {pill_title} • {pct_str}{extra_tag}")
 
-        # If operation ended and animation reached target, finish tick
-        if self._current_progress >= self._target_progress:
-            is_active = hasattr(self.pm, "is_pkg_installing") and self.pm.is_pkg_installing(self._progress_pkg_name)
-            active_tx = self.pm.get_active_transaction() if hasattr(self.pm, "get_active_transaction") else None
-            if not is_active and not active_tx:
+        if not self._active_ui_tasks and self._current_progress >= self._target_progress:
+            if not (hasattr(self.pm, "has_active_tasks") and self.pm.has_active_tasks()):
                 self._progress_anim_id = None
                 return False
 
-        return True  # Keep ticking
+        return True
 
     def _finish_smooth_progress(self, ok: bool, action: str, pkg_name: str, err: str = ""):
-        """Handle completion or failure of background action with elegant transitions."""
-        if getattr(self, "_progress_anim_id", None):
-            GLib.source_remove(self._progress_anim_id)
-            self._progress_anim_id = None
+        """Handle completion or failure of background action while keeping other concurrent/queued tasks alive."""
+        if not hasattr(self, "_active_ui_tasks"):
+            self._active_ui_tasks = {}
+        key = (pkg_name or "system").strip().lower()
+        finished_task = self._active_ui_tasks.pop(key, None)
+        disp = (finished_task.get("display_name") if finished_task else None) or (get_app_display_name(pkg_name) if pkg_name else "Package")
 
-        self.header_progress_spinner.stop()
-        disp = self._progress_display_name or (get_app_display_name(pkg_name) if pkg_name else "Package")
-
-        if ok:
-            self._current_progress = 1.0
-            self._target_progress = 1.0
-            done_title = "System Updated" if pkg_name in ["system", "--all", "all", ""] else f"{disp} Done"
-            self.header_progress_label.set_text(f"✓ {done_title}")
-
-            if hasattr(self, "progress_bar") and self.progress_container.get_visible():
-                if self._current_detail and self._current_detail.get("name") == pkg_name:
+        # Update Detail page if the user is currently looking at the package that just finished
+        if hasattr(self, "progress_bar") and self.progress_container.get_visible():
+            if self._current_detail and (self._current_detail.get("name") or "").strip().lower() == key:
+                if ok:
                     self.progress_bar.set_fraction(1.0)
                     self.progress_percent_label.set_text("100%")
                     if action == "install":
@@ -7250,6 +7825,61 @@ class AuraWindow(Adw.ApplicationWindow):
                         self.progress_status_label.set_text("✓ Removed successfully!")
                     else:
                         self.progress_status_label.set_text("✓ Operation complete!")
+                else:
+                    self.progress_bar.set_fraction(0.0)
+                    self.progress_percent_label.set_text("0%")
+                    self.progress_status_label.set_text(f"Error: {err[:55]}")
+
+        # Check if backend has already popped another queued package or if other concurrent tasks are running
+        active_tx = self.pm.get_active_transaction() if hasattr(self.pm, "get_active_transaction") else None
+        if active_tx and not active_tx.get("is_completed"):
+            tx_pkg = (active_tx.get("pkg_name") or "").strip()
+            tx_key = tx_pkg.lower()
+            if tx_key and tx_key != key and tx_key not in self._active_ui_tasks:
+                tx_act = active_tx.get("action", "install")
+                tx_src = active_tx.get("source", "pacman")
+                tx_disp = get_app_display_name(tx_pkg)
+                self._active_ui_tasks[tx_key] = {
+                    "action": tx_act,
+                    "pkg_name": tx_pkg,
+                    "display_name": tx_disp,
+                    "source": tx_src,
+                    "target_view": "updates" if tx_act in ("update", "upgrade") else "detail",
+                    "current": 0.05,
+                    "target": max(0.08, float(active_tx.get("progress", 0.06))),
+                    "status": str(active_tx.get("status_msg") or f"Installing {tx_disp}..."),
+                    "pill_title": f"Updating {tx_disp}" if tx_act in ("update", "upgrade") else f"Installing {tx_disp}",
+                    "start_time": time.monotonic(),
+                }
+
+        # If other tasks are still active, seamlessly switch header pill to the next active task!
+        if self._active_ui_tasks:
+            next_key, next_task = next(iter(self._active_ui_tasks.items()))
+            self._progress_pkg_name = next_task["pkg_name"]
+            self._progress_display_name = next_task["display_name"]
+            self._progress_action = next_task["action"]
+            self._progress_source = next_task["source"]
+            self._progress_target_view = next_task["target_view"]
+            self._current_progress = next_task["current"]
+            self._target_progress = next_task["target"]
+            self._progress_status_text = next_task["status"]
+            self.header_progress_pill.set_visible(True)
+            self.header_progress_spinner.start()
+            if not getattr(self, "_progress_anim_id", None):
+                self._progress_anim_id = GLib.timeout_add(16, self._on_progress_lerp_tick)
+            return
+
+        if getattr(self, "_progress_anim_id", None):
+            GLib.source_remove(self._progress_anim_id)
+            self._progress_anim_id = None
+
+        self.header_progress_spinner.stop()
+
+        if ok:
+            self._current_progress = 1.0
+            self._target_progress = 1.0
+            done_title = "System Updated" if pkg_name in ["system", "--all", "all", ""] else f"{disp} Done"
+            self.header_progress_label.set_text(f"✓ {done_title}")
 
             if hasattr(self, "updates_progress_bar") and self.updates_progress_box.get_visible():
                 self.updates_progress_bar.set_fraction(1.0)
@@ -7257,12 +7887,14 @@ class AuraWindow(Adw.ApplicationWindow):
                 self.updates_progress_lbl.set_text("✓ System update complete!" if pkg_name == "system" else f"✓ Updated {disp} successfully!")
 
             def _auto_dismiss():
+                self._progress_auto_hide_id = None
+                if getattr(self, "_progress_anim_id", None) or bool(getattr(self, "_active_ui_tasks", None)) or (hasattr(self.pm, "has_active_tasks") and self.pm.has_active_tasks()):
+                    return False
                 self.header_progress_pill.set_visible(False)
-                if hasattr(self, "progress_container") and self._current_detail and self._current_detail.get("name") == pkg_name:
+                if hasattr(self, "progress_container") and self._current_detail and (self._current_detail.get("name") or "").strip().lower() == key:
                     self.progress_container.set_visible(False)
                 if hasattr(self, "updates_progress_box"):
                     self.updates_progress_box.set_visible(False)
-                self._progress_auto_hide_id = None
                 return False
 
             self._progress_auto_hide_id = GLib.timeout_add(2500, _auto_dismiss)
@@ -7271,23 +7903,20 @@ class AuraWindow(Adw.ApplicationWindow):
             self._target_progress = 0.0
             self.header_progress_label.set_text(f"✕ Failed: {disp[:18]}")
 
-            if hasattr(self, "progress_bar") and self.progress_container.get_visible():
-                self.progress_bar.set_fraction(0.0)
-                self.progress_percent_label.set_text("0%")
-                self.progress_status_label.set_text(f"Error: {err[:55]}")
-
             if hasattr(self, "updates_progress_bar") and self.updates_progress_box.get_visible():
                 self.updates_progress_bar.set_fraction(0.0)
                 self.updates_percent_label.set_text("0%")
                 self.updates_progress_lbl.set_text(f"Error: {err[:55]}")
 
             def _auto_dismiss_err():
+                self._progress_auto_hide_id = None
+                if getattr(self, "_progress_anim_id", None) or bool(getattr(self, "_active_ui_tasks", None)) or (hasattr(self.pm, "has_active_tasks") and self.pm.has_active_tasks()):
+                    return False
                 self.header_progress_pill.set_visible(False)
-                if hasattr(self, "progress_container"):
+                if hasattr(self, "progress_container") and self._current_detail and (self._current_detail.get("name") or "").strip().lower() == key:
                     self.progress_container.set_visible(False)
                 if hasattr(self, "updates_progress_box"):
                     self.updates_progress_box.set_visible(False)
-                self._progress_auto_hide_id = None
                 return False
 
             self._progress_auto_hide_id = GLib.timeout_add(4500, _auto_dismiss_err)
@@ -7321,8 +7950,7 @@ class AuraWindow(Adw.ApplicationWindow):
             return
 
         if source == "snap":
-            snap_st = self.pm.snap_mgr.get_status()
-            if snap_st["status_code"] != "ready":
+            if not self.pm.snap_mgr.is_snapd_installed():
                 self._open_package_detail(pkg_name, source)
                 return
 
@@ -7347,14 +7975,30 @@ class AuraWindow(Adw.ApplicationWindow):
             btn.remove_css_class("mac-btn-get")
             btn.add_css_class("mac-btn-queued")
 
+        def _on_start():
+            def _ui_s():
+                self._start_smooth_progress("install", pkg_name, display_name=disp, source=source, target_view="detail")
+                if btn:
+                    btn.set_label("INSTALLING...")
+                    btn.remove_css_class("mac-btn-queued")
+                    if not btn.has_css_class("mac-btn-get"):
+                        btn.add_css_class("mac-btn-get")
+                    btn.set_sensitive(False)
+                self._sync_detail_page(pkg_name)
+                self._sync_all_cards()
+            GLib.idle_add(_ui_s)
+
         def _on_prog(frac: float, msg: str):
             def _ui_p():
+                if getattr(self, "_progress_pkg_name", "") != pkg_name or not getattr(self, "_progress_anim_id", None):
+                    self._start_smooth_progress("install", pkg_name, display_name=disp, source=source, target_view="detail")
                 if btn:
                     if btn.get_label() == "QUEUED" and frac > 0.0:
                         btn.set_label("INSTALLING...")
                         btn.remove_css_class("mac-btn-queued")
                         btn.add_css_class("mac-btn-get")
-                self._on_progress_update(frac, msg)
+                self._on_progress_update(frac, msg, pkg_name=pkg_name)
+                self._sync_detail_page(pkg_name)
             GLib.idle_add(_ui_p)
 
         def _on_done(ok: bool, action: str, name: str, err: str):
@@ -7364,6 +8008,8 @@ class AuraWindow(Adw.ApplicationWindow):
                     self.show_toast(f"Successfully installed {disp}!")
                     self.pm.refresh_installed()
                     self._cached_installed_apps_flow = None
+                    if hasattr(self, "sidebar_installed_badge"):
+                        self.sidebar_installed_badge.set_text(str(len(self.pm.get_installed_desktop_apps())))
                     if btn:
                         has_desktop = bool(self.pm.detect_desktop_entry(name))
                         btn.set_label("OPEN" if has_desktop else "INSTALLED")
@@ -7385,7 +8031,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 GLib.timeout_add(300, lambda: (self._sync_all_cards(), self._sync_detail_page(name)) and False)
             GLib.idle_add(_ui)
 
-        res = self.pm.execute_background_action("install", pkg_name, source, _on_prog, _on_done)
+        res = self.pm.execute_background_action("install", pkg_name, source, _on_prog, _on_done, start_cb=_on_start)
         if res == "queued":
             pos = self.pm.get_queue_position(pkg_name)
             self.show_toast(f"Added {disp} to installation queue (position #{pos})")
@@ -7409,8 +8055,7 @@ class AuraWindow(Adw.ApplicationWindow):
         disp = self._current_detail.get("display_name") or get_app_display_name(name)
 
         if source == "snap":
-            snap_st = self.pm.snap_mgr.get_status()
-            if snap_st["status_code"] != "ready":
+            if not self.pm.snap_mgr.is_snapd_installed():
                 dlg = Adw.AlertDialog.new(
                     "Snap Service Required",
                     f"To install '{disp}' from Canonical's Snap Store, the snapd background service is required.\n\nWould you like Aura to automatically configure and start snapd now?"
@@ -7426,15 +8071,23 @@ class AuraWindow(Adw.ApplicationWindow):
                 dlg.present(self)
                 return
 
+        def _on_start():
+            def _ui_s():
+                self._start_smooth_progress("install", name, display_name=disp, source=source, target_view="detail")
+                self._sync_detail_page(name)
+                self._sync_all_cards()
+            GLib.idle_add(_ui_s)
+
         def _on_prog(frac: float, status_msg: str):
             def _ui_p():
+                if getattr(self, "_progress_pkg_name", "") != name or not getattr(self, "_progress_anim_id", None):
+                    self._start_smooth_progress("install", name, display_name=disp, source=source, target_view="detail")
                 if hasattr(self, "btn_detail_install") and self._current_detail and self._current_detail.get("name") == name:
                     if self.btn_detail_install.get_label() == "QUEUED" and frac > 0.0:
                         self.btn_detail_install.set_label("INSTALLING...")
                         self.btn_detail_install.remove_css_class("mac-btn-queued")
                         self.btn_detail_install.add_css_class("mac-btn-primary-large")
-                        self._start_smooth_progress("install", name, display_name=disp, source=source, target_view="detail")
-                self._on_progress_update(frac, status_msg)
+                self._on_progress_update(frac, status_msg, pkg_name=name)
                 self._sync_detail_page(name)
             GLib.idle_add(_ui_p)
 
@@ -7445,6 +8098,8 @@ class AuraWindow(Adw.ApplicationWindow):
                     self.show_toast(f"Successfully installed {disp}!")
                     self.pm.refresh_installed()
                     self._cached_installed_apps_flow = None
+                    if hasattr(self, "sidebar_installed_badge"):
+                        self.sidebar_installed_badge.set_text(str(len(self.pm.get_installed_desktop_apps())))
                     self._sync_detail_page(pkg_name)
                     self._sync_all_cards()
                 else:
@@ -7459,7 +8114,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 GLib.timeout_add(300, lambda: (self._sync_all_cards(), self._sync_detail_page(pkg_name)) and False)
             GLib.idle_add(_ui)
 
-        res = self.pm.execute_background_action("install", name, source, _on_prog, _on_done)
+        res = self.pm.execute_background_action("install", name, source, _on_prog, _on_done, start_cb=_on_start)
         if res == "queued":
             pos = self.pm.get_queue_position(name)
             self.btn_detail_install.set_label("QUEUED")
@@ -7474,44 +8129,156 @@ class AuraWindow(Adw.ApplicationWindow):
             self._sync_detail_page(name)
             self._sync_all_cards()
 
-    def _on_remove_click(self):
-        if not self._current_detail:
+    def _ensure_auth_then_run(self, action_callback):
+        """
+        Ensure a valid administrator session or passwordless sudo rule is active before
+        launching background privileged actions. If not, prompt cleanly in-app once.
+        """
+        if self.pm.has_valid_sudo_session():
+            action_callback()
             return
-        name = self._current_detail["name"]
-        source = self._current_detail.get("source", "pacman")
-        disp = self._current_detail.get("display_name") or get_app_display_name(name)
 
+        dlg = Adw.AlertDialog.new(
+            "Administrator Authentication",
+            "Enter your sudo password to authorize this package action. You can enable Passwordless Mode below so Aura never needs to prompt again."
+        )
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+        entry.set_hexpand(True)
+        box.append(entry)
+
+        chk_pwless = Gtk.CheckButton(label="Enable Lifetime Passwordless Mode (Recommended)")
+        chk_pwless.set_active(True)
+        box.append(chk_pwless)
+
+        dlg.set_extra_child(box)
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("auth", "Authorize & Continue")
+        dlg.set_response_appearance("auth", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("auth")
+        dlg.set_close_response("cancel")
+
+        def _on_resp(d, resp):
+            if resp == "auth":
+                pwd = entry.get_text()
+                if not pwd:
+                    self.show_toast("Password cannot be empty.")
+                    return
+                ok, msg = self.pm.authenticate_session(pwd, enable_passwordless=chk_pwless.get_active())
+                self._update_auth_btn_status()
+                if ok:
+                    action_callback()
+                else:
+                    self.show_toast(msg)
+
+        dlg.connect("response", _on_resp)
+        dlg.present(self)
+
+    def _confirm_package_uninstall(self, name: str, source: str = "pacman", display_name: str = ""):
+        """
+        Present a smart Uninstall confirmation sheet showing the resolved package name
+        and a Clean Uninstall toggle to purge residual ~/.config, ~/.cache, and ~/.local/share data.
+        """
+        disp = display_name or get_app_display_name(name)
+        resolved_pkg = self.pm.resolve_installed_pkg_name(name) if hasattr(self.pm, "resolve_installed_pkg_name") else name
+
+        if source == "docker" or (hasattr(self.pm, "container_mgr") and self.pm.container_mgr.is_app_installed(name)):
+            self._confirm_container_uninstall(name, disp, self.btn_detail_remove)
+            return
+
+        dlg = Adw.AlertDialog.new(
+            f"Uninstall {disp}?",
+            f"This will remove package '{resolved_pkg}' ({source.upper()}) and its unused dependencies from your system."
+        )
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        chk_clean = Gtk.CheckButton()
+        chk_clean.set_active(True)
+        chk_clean_lbl = Gtk.Label(
+            label="Clean Uninstall (Also purge residual ~/.config, ~/.cache, and ~/.local/share app data)"
+        )
+        chk_clean_lbl.set_wrap(True)
+        chk_clean_lbl.set_xalign(0.0)
+        chk_clean_lbl.set_max_width_chars(38)
+        chk_clean.set_child(chk_clean_lbl)
+        box.append(chk_clean)
+
+        dlg.set_extra_child(box)
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("uninstall", "Uninstall")
+        dlg.set_response_appearance("uninstall", Adw.ResponseAppearance.DESTRUCTIVE)
+        dlg.set_default_response("uninstall")
+        dlg.set_close_response("cancel")
+
+        def _on_resp(d, resp):
+            if resp == "uninstall":
+                clean_mode = chk_clean.get_active()
+                self._execute_package_removal(name, source, disp, clean_remove=clean_mode)
+
+        dlg.connect("response", _on_resp)
+        dlg.present(self)
+
+    def _execute_package_removal(self, name: str, source: str, disp: str, clean_remove: bool = True):
         if source == "snap":
             import shutil
             if not shutil.which("snap"):
                 self.show_toast("Snap daemon is not installed.")
                 return
 
+        resolved_pkg = self.pm.resolve_installed_pkg_name(name)
+        action_type = "clean_remove" if clean_remove else "remove"
         self.btn_detail_remove.set_sensitive(False)
-        self._start_smooth_progress("remove", name, display_name=disp, source=source, target_view="detail")
+        curr_view = self.main_stack.get_visible_child_name()
+        target_v = "detail" if curr_view == "detail" else "updates"
+        self._start_smooth_progress("remove", name, display_name=disp, source=source, target_view=target_v)
 
         def _on_prog(frac: float, status_msg: str):
-            self._on_progress_update(frac, status_msg)
+            self._on_progress_update(frac, status_msg, pkg_name=name)
             self._sync_detail_page(name)
 
         def _on_done(ok: bool, action: str, pkg_name: str, err: str):
             def _ui():
                 self.btn_detail_remove.set_sensitive(True)
-                self._finish_smooth_progress(ok, action, pkg_name, err)
+                self._finish_smooth_progress(ok, "remove", pkg_name, err)
                 if ok:
-                    self.show_toast(f"Successfully removed {disp}!")
+                    msg_suffix = " and purged residual app data!" if clean_remove else "!"
+                    self.show_toast(f"Successfully uninstalled {disp}{msg_suffix}")
                     self.pm.refresh_installed()
                     self._cached_installed_apps_flow = None
-                    self._sync_detail_page(pkg_name)
+                    num_inst = len(self.pm.get_installed_desktop_apps())
+                    if hasattr(self, "sidebar_installed_badge"):
+                        self.sidebar_installed_badge.set_text(str(num_inst))
+                    if self.main_stack.get_visible_child_name() == "installed":
+                        self._load_installed_view()
+                    elif self.main_stack.get_visible_child_name() == "deb":
+                        self._load_deb_view()
+                    self._sync_detail_page(name)
+                    self._sync_detail_page(resolved_pkg)
                     self._sync_all_cards()
                 else:
-                    self.show_toast(f"Removal failed: {err[:50]}")
-                    self._sync_detail_page(pkg_name)
+                    self.show_toast(f"Removal failed: {err[:65]}")
+                    self._sync_detail_page(name)
                     self._sync_all_cards()
-                GLib.timeout_add(300, lambda: (self._sync_all_cards(), self._sync_detail_page(pkg_name)) and False)
+                GLib.timeout_add(300, lambda: (self._sync_all_cards(), self._sync_detail_page(name)) and False)
             GLib.idle_add(_ui)
 
-        self.pm.execute_background_action("remove", name, source, _on_prog, _on_done)
+        self.pm.execute_background_action(action_type, resolved_pkg, source, _on_prog, _on_done)
+
+    def _on_remove_click(self):
+        if not self._current_detail:
+            return
+        name = self._current_detail["name"]
+        source = self._current_detail.get("source", "pacman")
+        disp = self._current_detail.get("display_name") or get_app_display_name(name)
+        self._confirm_package_uninstall(name, source, disp)
 
     def _update_single_package(self, pkg_name: str, source: str = "pacman"):
         disp = get_app_display_name(pkg_name)
@@ -7555,8 +8322,16 @@ class AuraWindow(Adw.ApplicationWindow):
                 b.set_sensitive(False)
         self._sync_all_cards()
 
+        def _on_start():
+            def _ui_s():
+                self._start_smooth_progress("update", pkg_name, display_name=disp, source=source, target_view="updates")
+                self._sync_all_cards()
+            GLib.idle_add(_ui_s)
+
         def _on_prog(frac: float, msg: str):
             def _ui_p():
+                if getattr(self, "_progress_pkg_name", "") != pkg_name or not getattr(self, "_progress_anim_id", None):
+                    self._start_smooth_progress("update", pkg_name, display_name=disp, source=source, target_view="updates")
                 if hasattr(self, "_updates_buttons") and pkg_name in self._updates_buttons:
                     b = self._updates_buttons[pkg_name]
                     if b.get_label() == "QUEUED" and frac > 0.0:
@@ -7598,7 +8373,7 @@ class AuraWindow(Adw.ApplicationWindow):
                 self._sync_all_cards()
             GLib.idle_add(_ui)
 
-        res = self.pm.execute_background_action("update", pkg_name, source, _on_prog, _on_done)
+        res = self.pm.execute_background_action("update", pkg_name, source, _on_prog, _on_done, start_cb=_on_start)
         if res == "queued":
             pos = self.pm.get_queue_position(pkg_name)
             if btn:
@@ -7702,6 +8477,888 @@ class AuraWindow(Adw.ApplicationWindow):
             self.sidebar_updates_badge.set_visible(False)
         if self.main_stack.get_visible_child_name() == "updates":
             self._load_updates_view()
+
+    # =========================================================================
+    # System Doctor UI in Storage & Maintenance Page
+    # =========================================================================
+    def _update_doctor_ui(self, health: Dict[str, Any]):
+        if not hasattr(self, "doctor_rows_box"):
+            return
+        if not hasattr(self, "_doctor_row_widgets"):
+            self._doctor_row_widgets = {}
+
+        lock_st = health.get("lock_status", {})
+        is_locked = lock_st.get("locked", False)
+        is_stale = lock_st.get("is_stale", False)
+        active_procs = lock_st.get("active_processes", [])
+
+        # 1. Pacman Database Lock Card
+        if is_stale:
+            lock_sub = "Stale /var/lib/pacman/db.lck detected (no package manager running). Click Unlock to fix."
+            lock_status_txt = "Stale Lock"
+        elif is_locked:
+            lock_sub = f"Database currently in use by: {', '.join(active_procs)}"
+            lock_status_txt = "Busy"
+        else:
+            lock_sub = "No stale database lock (/var/lib/pacman/db.lck is clean and ready)."
+            lock_status_txt = "Healthy"
+
+        # 2. Orphaned Packages Card
+        orphan_count = health.get("orphan_count", 0)
+        orphans = health.get("orphans", [])
+        orphan_names = ", ".join(o["name"] for o in orphans[:5])
+        if orphan_count > 5:
+            orphan_names += f" +{orphan_count - 5} more"
+        orphan_desc = (
+            f"Unused build & dependency packages ({orphan_names}). Safe to remove via pacman -Rns."
+            if orphan_count > 0 else "Zero unused orphaned dependency packages on your system."
+        )
+
+        # 3. Arch Linux Keyring & Sync Repair Card
+        pacnew_count = health.get("pacnew_count", 0)
+        pacnew_note = f" • {pacnew_count} .pacnew config(s) in /etc" if pacnew_count > 0 else " • PGP master keys active"
+        keyring_desc = "Re-initializes pacman-key, populates master signatures, and refreshes archlinux-keyring to fix PGP errors." + pacnew_note
+
+        specs = [
+            ("lock", "changes-prevent-symbolic", "Pacman Database Lock Status", lock_sub, lock_status_txt, "/var/lib/pacman/db.lck", "Unlock DB", is_stale, self._on_doctor_unlock_click),
+            ("orphans", "user-trash-symbolic", "Orphaned Dependencies (pacman -Qdt)", orphan_desc, f"{orphan_count} Orphans", "Unused packages", "Remove Orphans", (orphan_count > 0), self._on_doctor_orphans_click),
+            ("keyring", "security-high-symbolic", "Arch Linux Keyring & Database Sync", keyring_desc, "PGP Keyring", "archlinux-keyring", "Repair Keyring", True, self._on_doctor_keyring_click),
+        ]
+
+        for key, icon_name, title, desc, metric_top, metric_sub, btn_label, btn_sensitive, on_click in specs:
+            existing = self._doctor_row_widgets.get(key)
+            if existing is not None and existing.get_parent() == self.doctor_rows_box:
+                existing._desc_lbl.set_label(desc)
+                existing._top_lbl.set_label(metric_top)
+                existing._sub_lbl.set_label(metric_sub)
+                existing._btn.set_label(btn_label)
+                existing._btn.set_sensitive(btn_sensitive)
+            else:
+                row = self._create_doctor_action_row(
+                    icon_name=icon_name,
+                    title=title,
+                    desc=desc,
+                    metric_top=metric_top,
+                    metric_sub=metric_sub,
+                    btn_label=btn_label,
+                    btn_sensitive=btn_sensitive,
+                    on_click=on_click
+                )
+                self._doctor_row_widgets[key] = row
+                self.doctor_rows_box.append(row)
+
+    def _create_doctor_action_row(
+        self,
+        icon_name: str,
+        title: str,
+        desc: str,
+        metric_top: str,
+        metric_sub: str,
+        btn_label: str,
+        btn_sensitive: bool,
+        on_click
+    ) -> Gtk.Box:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        row.add_css_class("mac-cache-row")
+        row.set_valign(Gtk.Align.CENTER)
+        row.set_hexpand(True)
+
+        icon_box = Gtk.Box()
+        icon_box.add_css_class("mac-squircle")
+        icon_box.set_size_request(44, 44)
+        icon_box.set_homogeneous(True)
+        icon_box.set_halign(Gtk.Align.CENTER)
+        icon_box.set_valign(Gtk.Align.CENTER)
+        icon_box.set_hexpand(False)
+        icon_box.set_vexpand(False)
+        icon_img = create_scaled_image(icon_name, size=22)
+        icon_box.append(icon_img)
+        row.append(icon_box)
+
+        info_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        info_col.set_hexpand(True)
+        info_col.set_valign(Gtk.Align.CENTER)
+
+        title_lbl = Gtk.Label(label=title)
+        title_lbl.add_css_class("mac-app-title")
+        title_lbl.set_halign(Gtk.Align.FILL)
+        title_lbl.set_xalign(0.0)
+        title_lbl.set_hexpand(True)
+        title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        title_lbl.set_max_width_chars(28)
+        info_col.append(title_lbl)
+
+        desc_lbl = Gtk.Label(label=desc)
+        desc_lbl.add_css_class("mac-app-desc")
+        desc_lbl.set_halign(Gtk.Align.FILL)
+        desc_lbl.set_xalign(0.0)
+        desc_lbl.set_hexpand(True)
+        desc_lbl.set_wrap(True)
+        desc_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        desc_lbl.set_lines(2)
+        desc_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        desc_lbl.set_max_width_chars(34)
+        info_col.append(desc_lbl)
+        row.append(info_col)
+
+        size_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        size_col.set_valign(Gtk.Align.CENTER)
+        size_col.set_hexpand(False)
+        size_col.set_margin_end(6)
+
+        top_lbl = Gtk.Label(label=metric_top)
+        top_lbl.add_css_class("mac-app-title")
+        top_lbl.set_halign(Gtk.Align.END)
+        top_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        top_lbl.set_max_width_chars(16)
+        size_col.append(top_lbl)
+
+        sub_lbl = Gtk.Label(label=metric_sub)
+        sub_lbl.add_css_class("dim-label")
+        sub_lbl.set_halign(Gtk.Align.END)
+        sub_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        sub_lbl.set_max_width_chars(16)
+        size_col.append(sub_lbl)
+        row.append(size_col)
+
+        btn = Gtk.Button(label=btn_label)
+        btn.add_css_class("mac-btn-get")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_hexpand(False)
+        btn.set_size_request(110, 32)
+        btn.set_sensitive(btn_sensitive)
+        btn.connect("clicked", on_click)
+        row.append(btn)
+        row._desc_lbl = desc_lbl
+        row._top_lbl = top_lbl
+        row._sub_lbl = sub_lbl
+        row._btn = btn
+        return row
+
+    def _on_doctor_unlock_click(self, btn: Gtk.Button):
+        btn.set_sensitive(False)
+        btn.set_label("Unlocking...")
+        self.pm.doctor_mgr.unlock_pacman_db(
+            complete_cb=lambda ok, msg: GLib.idle_add(lambda: (self.show_toast(msg), self._load_storage_view()))
+        )
+
+    def _on_doctor_orphans_click(self, btn: Gtk.Button):
+        btn.set_sensitive(False)
+        btn.set_label("Removing...")
+        self.pm.doctor_mgr.remove_orphans(
+            progress_cb=None,
+            complete_cb=lambda ok, msg: GLib.idle_add(lambda: (self.show_toast(msg), self._load_storage_view()))
+        )
+
+    def _on_doctor_keyring_click(self, btn: Gtk.Button):
+        btn.set_sensitive(False)
+        btn.set_label("Repairing...")
+        self.pm.doctor_mgr.repair_keyring(
+            progress_cb=None,
+            complete_cb=lambda ok, msg: GLib.idle_add(lambda: (btn.set_sensitive(True), btn.set_label("Repair Keyring"), self.show_toast(msg)))
+        )
+
+    # =========================================================================
+    # Page 10: .deb Package Bridge (Seamless Debian .deb Installer for Arch)
+    # =========================================================================
+    def _build_deb_page(self) -> Gtk.ScrolledWindow:
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add_css_class("aura-page")
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        box.set_margin_top(20)
+        box.set_margin_bottom(36)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+
+        # 1. Page Title Header
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        page_title = Gtk.Label(label=".deb Package Installer")
+        page_title.add_css_class("mac-page-title")
+        page_title.set_halign(Gtk.Align.START)
+        title_box.append(page_title)
+
+        page_subtitle = Gtk.Label(
+            label="Seamlessly convert, resolve Arch dependencies, apply Hyprland Wayland fixes, and install .deb files via Pacman"
+        )
+        page_subtitle.add_css_class("mac-page-subtitle")
+        page_subtitle.set_halign(Gtk.Align.START)
+        page_subtitle.set_wrap(True)
+        page_subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+        page_subtitle.set_max_width_chars(52)
+        title_box.append(page_subtitle)
+        box.append(title_box)
+
+        # 2. Hero Dropzone & File/URL Selector Spotlight Banner
+        hero_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        hero_card.add_css_class("mac-container-status-card")
+        hero_card.set_valign(Gtk.Align.CENTER)
+        hero_card.set_hexpand(True)
+
+        deb_icon_box = Gtk.Box()
+        deb_icon_box.add_css_class("mac-squircle")
+        deb_icon_box.set_size_request(54, 54)
+        deb_icon_box.set_homogeneous(True)
+        deb_icon_box.set_halign(Gtk.Align.CENTER)
+        deb_icon_box.set_valign(Gtk.Align.CENTER)
+        deb_icon_box.set_hexpand(False)
+        deb_icon_box.set_vexpand(False)
+        deb_icon = create_scaled_image("package-x-generic-symbolic", size=30)
+        deb_icon_box.append(deb_icon)
+        hero_card.append(deb_icon_box)
+
+        deb_info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        deb_info_box.set_hexpand(True)
+        deb_info_box.set_valign(Gtk.Align.CENTER)
+
+        deb_title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        deb_title = Gtk.Label(label="Native Arch Linux .deb Bridge")
+        deb_title.add_css_class("mac-spotlight-title")
+        deb_title.set_halign(Gtk.Align.START)
+        deb_title.set_ellipsize(Pango.EllipsizeMode.END)
+        deb_title.set_max_width_chars(28)
+        deb_title_row.append(deb_title)
+
+        deb_pill = Gtk.Label(label="PACMAN TRACKED")
+        deb_pill.add_css_class("mac-container-pill")
+        deb_pill.add_css_class("mac-container-pill-active")
+        deb_title_row.append(deb_pill)
+        deb_info_box.append(deb_title_row)
+
+        deb_desc = Gtk.Label(
+            label="Drop any .deb file onto Aura, choose a local archive, or paste a direct download URL. Automatically maps Debian libraries to Arch packages."
+        )
+        deb_desc.add_css_class("mac-spotlight-desc")
+        deb_desc.set_halign(Gtk.Align.FILL)
+        deb_desc.set_xalign(0.0)
+        deb_desc.set_hexpand(True)
+        deb_desc.set_wrap(True)
+        deb_desc.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        deb_desc.set_lines(2)
+        deb_desc.set_ellipsize(Pango.EllipsizeMode.END)
+        deb_desc.set_max_width_chars(38)
+        deb_info_box.append(deb_desc)
+
+        # Wayland Electron auto-fix checkbox with wrapped/ellipsized child label (zero horizontal overflow)
+        wayland_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        wayland_row.set_margin_top(2)
+        self.chk_deb_wayland = Gtk.CheckButton()
+        self.chk_deb_wayland.set_active(True)
+        chk_wl_lbl = Gtk.Label(label="Auto-inject Hyprland Native Wayland flags (--ozone-platform-hint=auto)")
+        chk_wl_lbl.add_css_class("mac-app-desc")
+        chk_wl_lbl.set_halign(Gtk.Align.START)
+        chk_wl_lbl.set_xalign(0.0)
+        chk_wl_lbl.set_wrap(True)
+        chk_wl_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        chk_wl_lbl.set_max_width_chars(36)
+        self.chk_deb_wayland.set_child(chk_wl_lbl)
+        wayland_row.append(self.chk_deb_wayland)
+        deb_info_box.append(wayland_row)
+
+        hero_card.append(deb_info_box)
+
+        # Action Buttons (Select .deb File + Install from URL)
+        deb_btn_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        deb_btn_col.set_valign(Gtk.Align.CENTER)
+        deb_btn_col.set_hexpand(False)
+
+        btn_pick_deb = Gtk.Button(label="Select .deb File...")
+        btn_pick_deb.add_css_class("mac-btn-get")
+        btn_pick_deb.set_size_request(132, 32)
+        btn_pick_deb.connect("clicked", self._on_pick_deb_file_click)
+        deb_btn_col.append(btn_pick_deb)
+
+        btn_url_deb = Gtk.Button(label="Install from URL...")
+        btn_url_deb.add_css_class("mac-btn-installed")
+        btn_url_deb.set_size_request(132, 32)
+        btn_url_deb.connect("clicked", self._on_deb_url_click)
+        deb_btn_col.append(btn_url_deb)
+
+        hero_card.append(deb_btn_col)
+        box.append(hero_card)
+
+        # 3. Live .deb Inspector & Progress Card (Shown when a .deb file is selected/dropped)
+        self.deb_inspector_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.deb_inspector_card.add_css_class("mac-about-card")
+        self.deb_inspector_card.set_visible(False)
+
+        insp_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        self.deb_insp_icon_box = Gtk.Box()
+        self.deb_insp_icon_box.add_css_class("mac-squircle")
+        self.deb_insp_icon_box.set_homogeneous(True)
+        self.deb_insp_icon_box.set_size_request(64, 64)
+        self.deb_insp_icon_box.set_hexpand(False)
+        self.deb_insp_icon_box.set_vexpand(False)
+        self.deb_insp_icon_box.set_halign(Gtk.Align.CENTER)
+        self.deb_insp_icon_box.set_valign(Gtk.Align.CENTER)
+        insp_top.append(self.deb_insp_icon_box)
+
+        insp_meta_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        insp_meta_col.set_hexpand(True)
+        insp_meta_col.set_valign(Gtk.Align.CENTER)
+
+        self.deb_insp_title = Gtk.Label(label="Package Name")
+        self.deb_insp_title.add_css_class("mac-section-title")
+        self.deb_insp_title.set_halign(Gtk.Align.START)
+        self.deb_insp_title.set_ellipsize(Pango.EllipsizeMode.END)
+        self.deb_insp_title.set_max_width_chars(32)
+        insp_meta_col.append(self.deb_insp_title)
+
+        self.deb_insp_sub = Gtk.Label(label="version • arch • size")
+        self.deb_insp_sub.add_css_class("mac-app-desc")
+        self.deb_insp_sub.set_halign(Gtk.Align.START)
+        self.deb_insp_sub.set_ellipsize(Pango.EllipsizeMode.END)
+        self.deb_insp_sub.set_max_width_chars(38)
+        insp_meta_col.append(self.deb_insp_sub)
+
+        self.deb_insp_deps_lbl = Gtk.Label(label="")
+        self.deb_insp_deps_lbl.add_css_class("dim-label")
+        self.deb_insp_deps_lbl.set_halign(Gtk.Align.START)
+        self.deb_insp_deps_lbl.set_wrap(True)
+        self.deb_insp_deps_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.deb_insp_deps_lbl.set_max_width_chars(38)
+        insp_meta_col.append(self.deb_insp_deps_lbl)
+
+        insp_top.append(insp_meta_col)
+
+        self.btn_deb_install_now = Gtk.Button(label="INSTALL .DEB")
+        self.btn_deb_install_now.add_css_class("mac-btn-primary-large")
+        self.btn_deb_install_now.set_valign(Gtk.Align.CENTER)
+        self.btn_deb_install_now.set_size_request(140, 38)
+        self.btn_deb_install_now.connect("clicked", self._on_install_inspected_deb_click)
+        insp_top.append(self.btn_deb_install_now)
+
+        self.deb_inspector_card.append(insp_top)
+
+        # Progress bar inside .deb inspector
+        self.deb_progress_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.deb_progress_box.set_visible(False)
+        self.deb_progress_lbl = Gtk.Label(label="Converting and installing .deb package...")
+        self.deb_progress_lbl.add_css_class("mac-progress-title")
+        self.deb_progress_lbl.set_halign(Gtk.Align.START)
+        self.deb_progress_box.append(self.deb_progress_lbl)
+
+        self.deb_progress_bar = Gtk.ProgressBar()
+        self.deb_progress_bar.add_css_class("mac-capsule-progress")
+        self.deb_progress_box.append(self.deb_progress_bar)
+        self.deb_inspector_card.append(self.deb_progress_box)
+
+        box.append(self.deb_inspector_card)
+
+        # 4. Discovered .deb Archives in ~/Downloads
+        dl_hdr_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        dl_hdr = Gtk.Label(label="Discovered .deb Files in ~/Downloads")
+        dl_hdr.add_css_class("mac-section-title")
+        dl_hdr.set_halign(Gtk.Align.START)
+        dl_hdr_box.append(dl_hdr)
+
+        sp_dl = Gtk.Box()
+        sp_dl.set_hexpand(True)
+        dl_hdr_box.append(sp_dl)
+
+        btn_rescan_deb = Gtk.Button(label="Rescan Downloads")
+        btn_rescan_deb.add_css_class("mac-see-all-btn")
+        btn_rescan_deb.connect("clicked", lambda b: self._load_deb_view())
+        dl_hdr_box.append(btn_rescan_deb)
+        box.append(dl_hdr_box)
+
+        self.deb_local_status_lbl = Gtk.Label(label="Scanning ~/Downloads for .deb archives...")
+        self.deb_local_status_lbl.add_css_class("dim-label")
+        self.deb_local_status_lbl.set_halign(Gtk.Align.START)
+        self.deb_local_status_lbl.set_wrap(True)
+        self.deb_local_status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.deb_local_status_lbl.set_max_width_chars(52)
+        box.append(self.deb_local_status_lbl)
+
+        self.deb_local_flow_box = self._create_symmetric_grid(min_columns=1, max_columns=4)
+        box.append(self.deb_local_flow_box)
+
+        # 5. Installed .deb Packages Section
+        inst_hdr = Gtk.Label(label="Installed .deb Applications (Tracked by Pacman)")
+        inst_hdr.add_css_class("mac-section-title")
+        inst_hdr.set_halign(Gtk.Align.START)
+        inst_hdr.set_ellipsize(Pango.EllipsizeMode.END)
+        inst_hdr.set_margin_top(12)
+        box.append(inst_hdr)
+
+        self.deb_installed_status_lbl = Gtk.Label(label="No .deb packages installed yet.")
+        self.deb_installed_status_lbl.add_css_class("dim-label")
+        self.deb_installed_status_lbl.set_halign(Gtk.Align.START)
+        self.deb_installed_status_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.deb_installed_status_lbl.set_max_width_chars(52)
+        box.append(self.deb_installed_status_lbl)
+
+        self.deb_installed_flow_box = self._create_symmetric_grid(min_columns=1, max_columns=4)
+        box.append(self.deb_installed_flow_box)
+
+        scrolled.set_child(box)
+        return scrolled
+
+    def _load_deb_view(self, inspect_path: Optional[str] = None):
+        if inspect_path:
+            self._inspect_and_display_deb(inspect_path)
+
+        def _bg():
+            local_debs = self.pm.deb_mgr.scan_local_debs() if hasattr(self.pm, "deb_mgr") else []
+            inst_debs = self.pm.deb_mgr.get_installed_debs() if hasattr(self.pm, "deb_mgr") else []
+
+            def _ui():
+                self.deb_local_flow_box.remove_all()
+                if local_debs:
+                    self.deb_local_status_lbl.set_text(
+                        f"Found {len(local_debs)} .deb archive{'s' if len(local_debs) != 1 else ''} ready for 1-click installation"
+                    )
+                    for d_info in local_debs:
+                        self.deb_local_flow_box.append(self._create_deb_file_card(d_info))
+                else:
+                    self.deb_local_status_lbl.set_text(
+                        "No .deb files found in ~/Downloads. Click 'Select .deb File...' above or drop a .deb file onto this window."
+                    )
+
+                self.deb_installed_flow_box.remove_all()
+                if inst_debs:
+                    self.deb_installed_status_lbl.set_text(
+                        f"{len(inst_debs)} .deb package{'s' if len(inst_debs) != 1 else ''} converted and tracked in Pacman"
+                    )
+                    for item in inst_debs:
+                        card = self._create_mac_app_row(
+                            item["name"],
+                            item.get("desc", "Converted .deb package"),
+                            "deb",
+                            title_override=item.get("display_name", ""),
+                            is_installed_view=True,
+                            icon_override=item.get("icon", "")
+                        )
+                        self.deb_installed_flow_box.append(card)
+                else:
+                    self.deb_installed_status_lbl.set_text("No .deb packages currently installed.")
+
+            GLib.idle_add(_ui)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _create_deb_file_card(self, d_info: Dict[str, Any]) -> Gtk.Box:
+        card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        card.add_css_class("mac-app-row")
+        card.set_hexpand(True)
+
+        icon_box = Gtk.Box()
+        icon_box.add_css_class("mac-squircle")
+        icon_box.set_homogeneous(True)
+        icon_box.set_size_request(54, 54)
+        icon_box.set_halign(Gtk.Align.CENTER)
+        icon_box.set_valign(Gtk.Align.CENTER)
+        icon_box.set_hexpand(False)
+        icon_box.set_vexpand(False)
+        img = create_scaled_image(d_info.get("icon", "package-x-generic-symbolic"), size=40)
+        icon_box.append(img)
+        card.append(icon_box)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        vbox.set_hexpand(True)
+        vbox.set_valign(Gtk.Align.CENTER)
+
+        title_lbl = Gtk.Label(label=d_info.get("display_name") or d_info.get("name", ".deb Package"))
+        title_lbl.add_css_class("mac-app-title")
+        title_lbl.set_halign(Gtk.Align.START)
+        title_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        vbox.append(title_lbl)
+
+        sub_txt = f"{d_info.get('deb_filename', '')} • v{d_info.get('deb_version', '')} • {d_info.get('csize_str', '')}"
+        desc_lbl = Gtk.Label(label=sub_txt)
+        desc_lbl.add_css_class("mac-app-desc")
+        desc_lbl.set_halign(Gtk.Align.START)
+        desc_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        vbox.append(desc_lbl)
+        card.append(vbox)
+
+        is_inst = d_info.get("is_installed", False)
+        btn = Gtk.Button(label="REINSTALL" if is_inst else "INSPECT & GET")
+        btn.add_css_class("mac-btn-installed" if is_inst else "mac-btn-get")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.set_size_request(112, 32)
+        deb_path = d_info.get("deb_path", "")
+        btn.connect("clicked", lambda b, p=deb_path: self._inspect_and_display_deb(p))
+        card.append(btn)
+        return card
+
+    def _inspect_and_display_deb(self, deb_path: str):
+        if not deb_path:
+            return
+        try:
+            info = self.pm.deb_mgr.inspect_deb(deb_path)
+        except Exception as e:
+            self.show_toast(f"Invalid .deb file: {e}")
+            return
+
+        self._current_inspected_deb = info
+        while (child := self.deb_insp_icon_box.get_first_child()):
+            self.deb_insp_icon_box.remove(child)
+        img = create_scaled_image(info.get("icon", "package-x-generic-symbolic"), size=48)
+        self.deb_insp_icon_box.append(img)
+
+        wayland_tag = " • ⚡ Electron App (Wayland Auto-Fix Ready)" if info.get("is_electron") else ""
+        self.deb_insp_title.set_text(f"{info.get('display_name', info['name'])} ({info['deb_filename']})")
+        self.deb_insp_sub.set_text(
+            f"Debian v{info['deb_version']} → Arch {info['name']}-{info['version']} ({info['arch']}) • "
+            f"Archive: {info['csize_str']} • Installed: {info['isize_str']}{wayland_tag}"
+        )
+
+        dep_rep = info.get("dep_report", {})
+        sat = len(dep_rep.get("installed", []))
+        miss_repo = dep_rep.get("missing_repo", [])
+        ign = len(dep_rep.get("ignored", []))
+        miss_txt = f" | Auto-installing from Arch repos: {', '.join(miss_repo[:6])}" if miss_repo else " | All Arch dependencies satisfied!"
+        self.deb_insp_deps_lbl.set_text(
+            f"Dependencies: {sat} already installed{miss_txt}" + (f" ({ign} Debian virtuals skipped)" if ign else "")
+        )
+
+        self.btn_deb_install_now.set_sensitive(True)
+        self.btn_deb_install_now.set_label("REINSTALL .DEB" if info.get("is_installed") else "INSTALL .DEB")
+        self.deb_progress_box.set_visible(False)
+        self.deb_inspector_card.set_visible(True)
+
+    def _on_pick_deb_file_click(self, btn: Gtk.Button):
+        try:
+            dialog = Gtk.FileDialog.new()
+            dialog.set_title("Select Debian (.deb) Package to Install on Arch Linux")
+            f_filter = Gtk.FileFilter()
+            f_filter.set_name("Debian Packages (*.deb)")
+            f_filter.add_pattern("*.deb")
+            filters = Gio.ListStore.new(Gtk.FileFilter)
+            filters.append(f_filter)
+            dialog.set_filters(filters)
+            dialog.set_default_filter(f_filter)
+
+            dl_dir = Path.home() / "Downloads"
+            if dl_dir.exists():
+                dialog.set_initial_folder(Gio.File.new_for_path(str(dl_dir)))
+
+            def _on_open_done(dlg, res):
+                try:
+                    gfile = dlg.open_finish(res)
+                    if gfile:
+                        path = gfile.get_path()
+                        if path:
+                            self._inspect_and_display_deb(path)
+                except Exception:
+                    pass
+
+            dialog.open(self, None, _on_open_done)
+        except Exception as e:
+            self.show_toast(f"Could not open file chooser: {e}")
+
+    def _on_deb_url_click(self, btn: Gtk.Button):
+        dlg = Adw.AlertDialog.new(
+            "Install .deb from Direct URL",
+            "Paste a direct HTTP/HTTPS link to any .deb package (e.g., Google Chrome, Discord, Cursor, Steam). Aura will download, convert, resolve dependencies, and install it via Pacman."
+        )
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("https://example.com/package-amd64.deb")
+        entry.set_hexpand(True)
+        dlg.set_extra_child(entry)
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("download", "Download & Install")
+        dlg.set_response_appearance("download", Adw.ResponseAppearance.SUGGESTED)
+        dlg.set_default_response("download")
+
+        def _on_resp(d, resp):
+            if resp == "download":
+                url = entry.get_text().strip()
+                if not url:
+                    self.show_toast("Please enter a valid .deb URL")
+                    return
+                self._start_deb_url_install(url)
+
+        dlg.connect("response", _on_resp)
+        dlg.present(self)
+
+    def _start_deb_url_install(self, url: str):
+        wayland_fix = self.chk_deb_wayland.get_active() if hasattr(self, "chk_deb_wayland") else True
+        self.deb_inspector_card.set_visible(True)
+        self.deb_insp_title.set_text("Downloading Remote .deb Package...")
+        self.deb_insp_sub.set_text(url)
+        self.deb_insp_deps_lbl.set_text("Preparing download and dependency translation...")
+        self.btn_deb_install_now.set_sensitive(False)
+        self.btn_deb_install_now.set_label("DOWNLOADING...")
+        self.deb_progress_box.set_visible(True)
+        self.deb_progress_bar.set_fraction(0.05)
+
+        def _prog(frac: float, msg: str):
+            def _ui():
+                self.deb_progress_bar.set_fraction(max(0.05, min(1.0, frac)))
+                self.deb_progress_lbl.set_text(msg)
+                self._on_progress_update(frac, msg, pkg_name=info['name'] if 'info' in locals() and isinstance(info, dict) else 'Remote .deb')
+            GLib.idle_add(_ui)
+
+        def _done(ok: bool, msg: str):
+            def _ui():
+                self._finish_smooth_progress(ok, "install", "deb-package", "" if ok else msg)
+                self.btn_deb_install_now.set_sensitive(True)
+                self.btn_deb_install_now.set_label("INSTALLED" if ok else "RETRY")
+                self.deb_progress_lbl.set_text(msg)
+                self.show_toast(msg)
+                self._load_deb_view()
+            GLib.idle_add(_ui)
+
+        self._start_smooth_progress("install", "Remote .deb", display_name="Remote .deb", source="deb", target_view="deb")
+        self.pm.deb_mgr.download_and_install_deb(url, wayland_fix=wayland_fix, progress_cb=_prog, complete_cb=_done)
+
+    def _on_install_inspected_deb_click(self, btn: Gtk.Button):
+        info = getattr(self, "_current_inspected_deb", None)
+        if not info or not info.get("deb_path"):
+            return
+        deb_path = info["deb_path"]
+        disp = info.get("display_name", info["name"])
+        wayland_fix = self.chk_deb_wayland.get_active() if hasattr(self, "chk_deb_wayland") else True
+
+        btn.set_sensitive(False)
+        btn.set_label("INSTALLING...")
+        self.deb_progress_box.set_visible(True)
+        self.deb_progress_bar.set_fraction(0.05)
+        self.deb_progress_lbl.set_text(f"Starting conversion & installation for {disp}...")
+
+        self._start_smooth_progress("install", info["name"], display_name=disp, source="deb", target_view="deb")
+
+        def _prog(frac: float, msg: str):
+            def _ui():
+                self.deb_progress_bar.set_fraction(max(0.05, min(1.0, frac)))
+                self.deb_progress_lbl.set_text(msg)
+                self._on_progress_update(frac, msg, pkg_name=info['name'] if 'info' in locals() and isinstance(info, dict) else 'Remote .deb')
+            GLib.idle_add(_ui)
+
+        def _done(ok: bool, msg: str):
+            def _ui():
+                self._finish_smooth_progress(ok, "install", info["name"], "" if ok else msg)
+                btn.set_sensitive(True)
+                btn.set_label("INSTALLED" if ok else "INSTALL .DEB")
+                self.deb_progress_bar.set_fraction(1.0 if ok else 0.0)
+                self.deb_progress_lbl.set_text(msg)
+                self.show_toast(msg)
+                self._load_deb_view()
+                self._sync_all_cards()
+            GLib.idle_add(_ui)
+
+        self.pm.deb_mgr.install_deb(deb_path, wayland_fix=wayland_fix, progress_cb=_prog, complete_cb=_done)
+
+    def _on_window_file_dropped(self, drop_target, value, x, y) -> bool:
+        try:
+            files = value.get_files() if hasattr(value, "get_files") else []
+            for gfile in files:
+                p = gfile.get_path()
+                if p and p.lower().endswith(".deb"):
+                    if "deb" in self.sidebar_buttons:
+                        self.sidebar_buttons["deb"].set_active(True)
+                    self.main_stack.set_visible_child_name("deb")
+                    self._load_deb_view(inspect_path=p)
+                    self.show_toast(f"Loaded { os.path.basename(p) } in .deb Package Bridge")
+                    return True
+        except Exception:
+            pass
+        return False
+
+    # =========================================================================
+    # Page 11: Hyprland Hub (Wayland Diagnostics, Rules & Ecosystem)
+    # =========================================================================
+    def _build_hyprland_page(self) -> Gtk.ScrolledWindow:
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add_css_class("aura-page")
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        box.set_margin_top(20)
+        box.set_margin_bottom(36)
+        box.set_margin_start(20)
+        box.set_margin_end(20)
+
+        # 1. Header
+        title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        page_title = Gtk.Label(label="Hyprland Hub")
+        page_title.add_css_class("mac-page-title")
+        page_title.set_halign(Gtk.Align.START)
+        title_box.append(page_title)
+
+        page_subtitle = Gtk.Label(
+            label="Live Wayland compositor diagnostics, window rules, Electron Wayland optimization, and essential Hyprland companion tools"
+        )
+        page_subtitle.add_css_class("mac-page-subtitle")
+        page_subtitle.set_halign(Gtk.Align.START)
+        page_subtitle.set_wrap(True)
+        page_subtitle.set_ellipsize(Pango.EllipsizeMode.END)
+        page_subtitle.set_max_width_chars(52)
+        title_box.append(page_subtitle)
+        box.append(title_box)
+
+        # 2. Live Hyprland Compositor Telemetry Card
+        status_card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        status_card.add_css_class("mac-container-status-card")
+        status_card.set_valign(Gtk.Align.CENTER)
+        status_card.set_hexpand(True)
+
+        h_icon_box = Gtk.Box()
+        h_icon_box.add_css_class("mac-squircle")
+        h_icon_box.set_size_request(54, 54)
+        h_icon_box.set_homogeneous(True)
+        h_icon_box.set_halign(Gtk.Align.CENTER)
+        h_icon_box.set_valign(Gtk.Align.CENTER)
+        h_icon_box.set_hexpand(False)
+        h_icon_box.set_vexpand(False)
+        h_icon = create_scaled_image("preferences-desktop-display-symbolic", size=30)
+        h_icon_box.append(h_icon)
+        status_card.append(h_icon_box)
+
+        h_info_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        h_info_col.set_hexpand(True)
+        h_info_col.set_valign(Gtk.Align.CENTER)
+
+        h_title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        h_title_row.set_hexpand(True)
+        self.hypr_version_lbl = Gtk.Label(label="Hyprland Wayland Compositor")
+        self.hypr_version_lbl.add_css_class("mac-spotlight-title")
+        self.hypr_version_lbl.set_halign(Gtk.Align.START)
+        self.hypr_version_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.hypr_version_lbl.set_max_width_chars(32)
+        h_title_row.append(self.hypr_version_lbl)
+
+        self.hypr_status_pill = Gtk.Label(label="WAYLAND")
+        self.hypr_status_pill.add_css_class("mac-container-pill")
+        self.hypr_status_pill.add_css_class("mac-container-pill-active")
+        self.hypr_status_pill.set_valign(Gtk.Align.CENTER)
+        h_title_row.append(self.hypr_status_pill)
+        h_info_col.append(h_title_row)
+
+        self.hypr_monitors_lbl = Gtk.Label(label="Inspecting Wayland outputs, portals, and companion daemons...")
+        self.hypr_monitors_lbl.add_css_class("mac-spotlight-desc")
+        self.hypr_monitors_lbl.set_halign(Gtk.Align.FILL)
+        self.hypr_monitors_lbl.set_xalign(0.0)
+        self.hypr_monitors_lbl.set_hexpand(True)
+        self.hypr_monitors_lbl.set_wrap(True)
+        self.hypr_monitors_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.hypr_monitors_lbl.set_max_width_chars(44)
+        h_info_col.append(self.hypr_monitors_lbl)
+
+        self.hypr_daemons_lbl = Gtk.Label(label="")
+        self.hypr_daemons_lbl.add_css_class("dim-label")
+        self.hypr_daemons_lbl.set_halign(Gtk.Align.FILL)
+        self.hypr_daemons_lbl.set_xalign(0.0)
+        self.hypr_daemons_lbl.set_hexpand(True)
+        self.hypr_daemons_lbl.set_wrap(True)
+        self.hypr_daemons_lbl.set_lines(2)
+        self.hypr_daemons_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        self.hypr_daemons_lbl.set_max_width_chars(44)
+        h_info_col.append(self.hypr_daemons_lbl)
+
+        status_card.append(h_info_col)
+        box.append(status_card)
+
+        # 3. One-Click Hyprland Optimizations Section
+        opt_hdr = Gtk.Label(label="One-Click Hyprland & Wayland Optimizations")
+        opt_hdr.add_css_class("mac-section-title")
+        opt_hdr.set_halign(Gtk.Align.START)
+        box.append(opt_hdr)
+
+        self.hypr_opt_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.append(self.hypr_opt_box)
+
+        # 4. Curated Hyprland Ecosystem Grid
+        eco_hdr = Gtk.Label(label="Essential Hyprland Ecosystem Packages")
+        eco_hdr.add_css_class("mac-section-title")
+        eco_hdr.set_halign(Gtk.Align.START)
+        eco_hdr.set_margin_top(8)
+        box.append(eco_hdr)
+
+        self.hypr_flow_box = self._create_symmetric_grid(min_columns=1, max_columns=4)
+        hypr_cat = next((c for c in CURATED_CATEGORIES if c.get("id") == "hyprland"), None)
+        if hypr_cat:
+            for app_meta in hypr_cat.get("apps", []):
+                card = self._create_mac_app_row(
+                    app_meta["name"],
+                    app_meta.get("desc", ""),
+                    app_meta.get("source", "pacman"),
+                    title_override=app_meta.get("title", "")
+                )
+                self.hypr_flow_box.append(card)
+        box.append(self.hypr_flow_box)
+
+        scrolled.set_child(box)
+        return scrolled
+
+    def _load_hyprland_view(self):
+        def _bg():
+            st = self.pm.hypr_mgr.get_status() if hasattr(self.pm, "hypr_mgr") else {}
+            def _ui():
+                ver = st.get("version", "Hyprland Compositor")
+                self.hypr_version_lbl.set_text(ver if ver != "Not detected" else "Hyprland Wayland Environment")
+                if st.get("hypr_active"):
+                    self.hypr_status_pill.set_text("ACTIVE SESSION")
+                else:
+                    self.hypr_status_pill.set_text("CONFIG READY")
+
+                mons = st.get("monitors", [])
+                if mons:
+                    m_strs = [f"{m['name']} ({m['width']}x{m['height']} @ {m['refresh']}Hz, {m['scale']}x scale)" for m in mons]
+                    self.hypr_monitors_lbl.set_text("Displays: " + " • ".join(m_strs))
+                else:
+                    self.hypr_monitors_lbl.set_text(f"Wayland Socket: {st.get('wayland_display', 'wayland-1')} • Configured for floating 1040x680 glass layout")
+
+                daemons = [
+                    f"Portal: {'✓ xdg-desktop-portal-hyprland' if st.get('portal_installed') else '✕ Missing'}",
+                    f"Polkit: {st.get('polkit_agent') or 'Not running'}",
+                    f"Bar: {st.get('status_bar') or 'None'}",
+                    f"Wallpaper: {st.get('wallpaper_daemon') or 'None'}",
+                    f"Notifications: {st.get('notification_daemon') or 'None'}",
+                    f"Audio: {st.get('audio_server') or 'PipeWire'}",
+                ]
+                self.hypr_daemons_lbl.set_text("  •  ".join(daemons))
+
+                while (child := self.hypr_opt_box.get_first_child()):
+                    self.hypr_opt_box.remove(child)
+
+                rules_ok = st.get("rules_configured", False)
+                row_rules = self._create_doctor_action_row(
+                    icon_name="preferences-system-windows-symbolic",
+                    title="Aura Floating Window Rules & Super+A Keybind",
+                    desc="Sources hyprland-aura.conf in ~/.config/hypr/hyprland.conf so Aura & its authentication prompt float and center smoothly.",
+                    metric_top="Configured" if rules_ok else "Not Applied",
+                    metric_sub="hyprland.conf",
+                    btn_label="Remove Rules" if rules_ok else "Apply Rules",
+                    btn_sensitive=True,
+                    on_click=lambda b, en=(not rules_ok): self._on_toggle_hypr_rules(en)
+                )
+                self.hypr_opt_box.append(row_rules)
+
+                wl_ok = st.get("wayland_flags_configured", False)
+                row_wl = self._create_doctor_action_row(
+                    icon_name="applications-graphics-symbolic",
+                    title="Electron & Chromium Native Wayland Ozone Optimizer",
+                    desc="Configures electron-flags.conf, code-flags.conf, spotify-flags.conf & chromium-flags.conf with --ozone-platform-hint=auto for sharp HiDPI text.",
+                    metric_top="Enabled" if wl_ok else "Default (XWayland)",
+                    metric_sub="Ozone Wayland",
+                    btn_label="Reset Flags" if wl_ok else "Enable Wayland",
+                    btn_sensitive=True,
+                    on_click=lambda b, en=(not wl_ok): self._on_toggle_electron_wayland(en)
+                )
+                self.hypr_opt_box.append(row_wl)
+                self._sync_all_cards()
+
+            GLib.idle_add(_ui)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _on_toggle_hypr_rules(self, enable: bool):
+        ok, msg = self.pm.hypr_mgr.configure_window_rules(enable=enable)
+        self.show_toast(msg)
+        self._load_hyprland_view()
+
+    def _on_toggle_electron_wayland(self, enable: bool):
+        ok, msg = self.pm.hypr_mgr.configure_electron_wayland_flags(enable=enable)
+        self.show_toast(msg)
+        self._load_hyprland_view()
 
     def _reload_database(self):
         self.show_toast("Reloading package database...")

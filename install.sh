@@ -42,7 +42,7 @@ ICONS_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
 echo -e "${BLUE}==>${RESET} Checking system dependencies..."
 MISSING_DEPS=()
 
-for dep in python python-gobject gtk4 libadwaita pacman-contrib; do
+for dep in python python-gobject gtk4 libadwaita pacman-contrib libarchive zstd; do
     if ! pacman -Q "$dep" &>/dev/null; then
         MISSING_DEPS+=("$dep")
     fi

@@ -54,7 +54,7 @@ class AuraApplication(Adw.Application):
         if len(args) > 1:
             raw_arg = args[1]
             if raw_arg in ["-h", "--help"]:
-                print("Usage: aura [search-query] [--discover] [--updates|-u] [--installed] [--docker|-D] [--snap|-S] [--storage] [--detail <pkg>] [--install <pkg>] [appstream://<app-id>]")
+                print("Usage: aura [search-query] [file.deb] [--deb|-B [file.deb]] [--hyprland|-H] [--discover] [--updates|-u] [--installed] [--docker|-D] [--snap|-S] [--storage] [--detail <pkg>] [--install <pkg|file.deb>] [appstream://<app-id>]")
                 print("Aura App Store - Minimal, Modern App Store tailored for Hyprland")
                 return 0
             elif raw_arg in ["--discover"]:
@@ -69,6 +69,15 @@ class AuraApplication(Adw.Application):
                 action = "snap"
             elif raw_arg in ["--storage", "--maintenance"]:
                 action = "storage"
+            elif raw_arg in ["--deb", "-B"]:
+                action = "deb"
+                if len(args) > 2:
+                    target_pkg = args[2]
+            elif raw_arg in ["--hyprland", "-H"]:
+                action = "hyprland"
+            elif raw_arg.lower().endswith(".deb"):
+                action = "deb"
+                target_pkg = raw_arg
             elif raw_arg in ["-m", "--maximize"]:
                 action = "maximize"
             elif raw_arg in ["-f", "--fullscreen"]:
@@ -132,7 +141,7 @@ class AuraApplication(Adw.Application):
             elif raw_arg.startswith("aura://") or raw_arg.startswith("aura:"):
                 prefix = "aura://" if raw_arg.startswith("aura://") else "aura:"
                 uri_val = raw_arg[len(prefix):].strip("/")
-                if uri_val in ("discover", "updates", "installed", "docker", "snap", "storage"):
+                if uri_val in ("discover", "updates", "installed", "docker", "snap", "storage", "deb", "hyprland"):
                     action = uri_val
                 elif uri_val.startswith("detail/"):
                     action = "detail"
@@ -207,6 +216,20 @@ class AuraApplication(Adw.Application):
             if target:
                 target.set_active(True)
             self.window._on_sidebar_channel_click("storage")
+        elif action == "deb":
+            self.window.back_btn.set_visible(False)
+            target = self.window.sidebar_buttons.get("deb")
+            if target:
+                target.set_active(True)
+            self.window._on_sidebar_channel_click("deb")
+            if target_pkg:
+                self.window._load_deb_view(inspect_path=target_pkg)
+        elif action == "hyprland":
+            self.window.back_btn.set_visible(False)
+            target = self.window.sidebar_buttons.get("hyprland")
+            if target:
+                target.set_active(True)
+            self.window._on_sidebar_channel_click("hyprland")
         elif action == "maximize":
             self.window.maximize()
         elif action == "fullscreen":
@@ -241,7 +264,7 @@ def main():
     initial_q = ""
     if len(sys.argv) > 1:
         first = sys.argv[1]
-        if not first.startswith("-") and not first.startswith("%") and "://" not in first and not first.startswith("aura:"):
+        if not first.startswith("-") and not first.startswith("%") and "://" not in first and not first.startswith("aura:") and not first.lower().endswith(".deb"):
             initial_q = " ".join(sys.argv[1:])
 
     app = AuraApplication(initial_query=initial_q)

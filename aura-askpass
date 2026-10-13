@@ -1,28 +1,212 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
-# Aura Package Hub - GUI AskPass Helper
+# Aura Package Hub - GUI AskPass Helper (Hyprland & Wayland Hardened)
 # =============================================================================
 # Invoked by sudo (SUDO_ASKPASS) when package operations require authentication.
-# Never persists or stores administrator passwords on disk or volatile memory.
+# Automatically reconstructs Wayland/X11/DBus environment variables stripped by
+# sudo's 'Defaults env_reset' so graphical prompts never fail on Hyprland.
 
 PROMPT_TITLE="Aura Package Hub Authentication"
 PROMPT_TEXT="Enter your administrator password to authenticate Aura:"
 PASS=""
 
-# Clean up any legacy plaintext vault or session token if found
-VAULT_FILE="$HOME/.local/share/aura/.aura_vault"
-CACHE_FILE="/run/user/$(id -u)/aura_auth.token"
-rm -f "$VAULT_FILE" "$CACHE_FILE" 2>/dev/null || true
+# 0. Reconstruct display & runtime environment if stripped by sudo env_reset
+USER_ID="$(id -u)"
+if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/${USER_ID}" ]; then
+    export XDG_RUNTIME_DIR="/run/user/${USER_ID}"
+fi
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -S "/run/user/${USER_ID}/bus" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${USER_ID}/bus"
+fi
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    for wsock in "${XDG_RUNTIME_DIR}"/wayland-*; do
+        if [ -S "$wsock" ]; then
+            export WAYLAND_DISPLAY="$(basename "$wsock")"
+            break
+        fi
+    done
+fi
+if [ -z "${DISPLAY:-}" ]; then
+    for xsock in /tmp/.X11-unix/X*; do
+        if [ -S "$xsock" ]; then
+            xnum="${xsock#/tmp/.X11-unix/X}"
+            export DISPLAY=":${xnum}"
+            break
+        fi
+    done
+fi
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    export GDK_BACKEND="wayland,x11"
+fi
 
-# Support common Linux desktop GUI password prompts
+# Clean up any legacy plaintext vault if found
+VAULT_FILE="$HOME/.local/share/aura/.aura_vault"
+rm -f "$VAULT_FILE" 2>/dev/null || true
+
+# Check if an ephemeral in-memory session token was pre-authorized by Aura UI
+SESSION_TOKEN="/run/user/${USER_ID}/.aura_session_pass"
+if [ -f "$SESSION_TOKEN" ]; then
+    PASS="$(cat "$SESSION_TOKEN" 2>/dev/null)"
+    if [ -n "$PASS" ]; then
+        echo "$PASS"
+        exit 0
+    fi
+fi
+
+# 1. Native GTK4 / Libadwaita In-App Style Graphical Prompter (Guaranteed on Arch/Hyprland)
+if [ -n "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ] && command -v python3 >/dev/null 2>&1; then
+    PASS=$(python3 - << 'PYEOF' 2>/dev/null
+import sys
+try:
+    import gi
+    gi.require_version('Gtk', '4.0')
+    gi.require_version('Adw', '1')
+    from gi.repository import Gtk, Adw, Gdk
+except Exception:
+    sys.exit(2)
+
+class AskPassApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="io.github.aura.askpass")
+        self.password = None
+
+    def do_activate(self):
+        win = Adw.Window(application=self, title="Aura Authentication")
+        win.set_default_size(430, 240)
+        win.set_resizable(False)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(b"""
+            window {
+                background-color: #101218;
+                color: #f5f5f7;
+                border: 1px solid rgba(255, 255, 255, 0.14);
+                border-radius: 18px;
+            }
+            .ask-card {
+                padding: 24px 26px;
+            }
+            .ask-title {
+                font-size: 16px;
+                font-weight: 800;
+                color: #ffffff;
+                letter-spacing: -0.2px;
+            }
+            .ask-sub {
+                font-size: 12.5px;
+                color: #98989d;
+            }
+            .ask-btn-cancel {
+                background: rgba(255,255,255,0.08);
+                color: #e5e5ea;
+                border-radius: 9999px;
+                padding: 7px 18px;
+                font-weight: 600;
+            }
+            .ask-btn-ok {
+                background: linear-gradient(135deg, #0a84ff, #0066cc);
+                color: #ffffff;
+                border-radius: 9999px;
+                padding: 7px 22px;
+                font-weight: 700;
+            }
+        """)
+        display = Gdk.Display.get_default()
+        if display:
+            Gtk.StyleContext.add_provider_for_display(
+                display, css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        box.add_css_class("ask-card")
+        box.set_valign(Gtk.Align.CENTER)
+
+        hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        icon = Gtk.Image.new_from_icon_name("dialog-password-symbolic")
+        icon.set_pixel_size(30)
+        hdr.append(icon)
+
+        tbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        title = Gtk.Label(label="Administrator Authentication", xalign=0)
+        title.add_css_class("ask-title")
+        sub = Gtk.Label(label="Enter your sudo password to authorize this package transaction.", xalign=0)
+        sub.add_css_class("ask-sub")
+        sub.set_wrap(True)
+        tbox.append(title)
+        tbox.append(sub)
+        hdr.append(tbox)
+        box.append(hdr)
+
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+        entry.set_hexpand(True)
+        box.append(entry)
+
+        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        btns.set_halign(Gtk.Align.END)
+        btn_cancel = Gtk.Button(label="Cancel")
+        btn_cancel.add_css_class("ask-btn-cancel")
+        btn_ok = Gtk.Button(label="Authenticate")
+        btn_ok.add_css_class("ask-btn-ok")
+        btns.append(btn_cancel)
+        btns.append(btn_ok)
+        box.append(btns)
+
+        def submit(*_):
+            txt = entry.get_text()
+            if txt:
+                self.password = txt
+            win.close()
+
+        def cancel(*_):
+            self.password = None
+            win.close()
+
+        entry.connect("activate", submit)
+        btn_ok.connect("clicked", submit)
+        btn_cancel.connect("clicked", cancel)
+
+        key_ctrl = Gtk.EventControllerKey.new()
+        def on_key(ctrl, keyval, keycode, state):
+            if keyval == Gdk.KEY_Escape:
+                cancel()
+                return True
+            return False
+        key_ctrl.connect("key-pressed", on_key)
+        win.add_controller(key_ctrl)
+
+        win.set_content(box)
+        win.present()
+        entry.grab_focus()
+
+app = AskPassApp()
+app.run([])
+if app.password:
+    print(app.password)
+    sys.exit(0)
+sys.exit(1)
+PYEOF
+)
+    RET=$?
+    if [ $RET -eq 0 ] && [ -n "$PASS" ]; then
+        echo "$PASS"
+        exit 0
+    elif [ $RET -eq 1 ]; then
+        exit 1
+    fi
+fi
+
+# 2. Fallback to standard Linux / Wayland desktop GUI password prompts
 if command -v zenity >/dev/null 2>&1; then
     PASS=$(zenity --password --title="$PROMPT_TITLE" --text="$PROMPT_TEXT" 2>/dev/null)
 elif command -v kdialog >/dev/null 2>&1; then
     PASS=$(kdialog --password "Enter Administrator Password for Aura" 2>/dev/null)
-elif command -v rofi >/dev/null 2>&1; then
-    PASS=$(rofi -dmenu -password -p "Admin Password" -lines 0 2>/dev/null)
 elif command -v wofi >/dev/null 2>&1; then
     PASS=$(wofi --password --dmenu --prompt "Admin Password" 2>/dev/null)
+elif command -v fuzzel >/dev/null 2>&1; then
+    PASS=$(fuzzel --dmenu --password --prompt="Admin Password: " 2>/dev/null)
+elif command -v rofi >/dev/null 2>&1; then
+    PASS=$(rofi -dmenu -password -p "Admin Password" -lines 0 2>/dev/null)
 elif command -v pinentry >/dev/null 2>&1; then
     PASS=$(echo "GETPIN" | pinentry 2>/dev/null | grep -E '^D ' | sed 's/^D //')
 fi
@@ -31,6 +215,5 @@ if [ -n "$PASS" ]; then
     echo "$PASS"
     exit 0
 else
-    # User cancelled or no graphical prompter available
     exit 1
 fi

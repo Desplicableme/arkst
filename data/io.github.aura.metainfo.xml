@@ -14,11 +14,11 @@
     </p>
     <p>Features:</p>
     <ul>
-      <li>Tailored specifically for Hyprland Wayland compositor with native floating rules</li>
-      <li>Instant fuzzy search across official Pacman repositories and AUR via Paru</li>
-      <li>Isolated OCI container sandbox using native Docker for desktop applications</li>
-      <li>Lifetime passwordless mode with encrypted local credentials vault</li>
-      <li>System updates manager with one-click batch upgrades</li>
+      <li>Tailored specifically for Hyprland Wayland compositor with live diagnostics, 1-click window rules, and Electron Wayland Ozone optimization</li>
+      <li>Seamless native Debian (.deb) package installer with 175+ Debian-to-Arch dependency mappings, FHS normalization, and Pacman tracking</li>
+      <li>Instant fuzzy search across official Pacman repositories and AUR via Paru/Yay or native makepkg fallback</li>
+      <li>Isolated OCI container sandbox using native Docker with Wayland and PipeWire audio pass-through</li>
+      <li>System Doctor with stale db.lck unlocking, orphaned package cleanup, and Arch PGP keyring repair</li>
       <li>Liquid 60FPS fluid spring animations and macOS micro-interactions</li>
     </ul>
   </description>
@@ -29,6 +29,8 @@
   </categories>
   <provides>
     <binary>aura</binary>
+    <mediatype>application/vnd.debian.binary-package</mediatype>
+    <mediatype>application/x-deb</mediatype>
   </provides>
   <content_rating type="oars-1.1"/>
 </component>

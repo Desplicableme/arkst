@@ -1,8 +1,8 @@
 # Maintainer: Arka <https://github.com/Desplicableme/aura-store>
 pkgname=aura-appstore-git
-pkgver=1.0.0.r120.g725e105
+pkgver=2.0.0.r135.g725e105
 pkgrel=1
-pkgdesc="Mac-inspired modern App Store tailored exclusively for Hyprland on Arch Linux"
+pkgdesc="Mac-inspired modern App Store tailored exclusively for Hyprland on Arch Linux with native .deb bridge"
 arch=('any')
 url="https://github.com/Desplicableme/aura-store"
 license=('GPL-3.0-or-later')
@@ -12,10 +12,13 @@ depends=(
     'gtk4'
     'libadwaita'
     'pacman-contrib'
+    'libarchive'
+    'zstd'
 )
 optdepends=(
     'paru: AUR package helper integration'
     'yay: Alternative AUR package helper'
+    'debtap: Optional secondary .deb package conversion backend'
     'docker: Isolated OCI sandbox applications'
 )
 provides=('aura-appstore')
@@ -26,9 +29,9 @@ sha256sums=('SKIP')
 pkgver() {
     cd "${srcdir}/aura-store" 2>/dev/null || cd "${startdir:-.}"
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git describe --long --tags 2>/dev/null | sed 's/^[vV]//;s/\([^-]*-g\)/r\1/;s/-/./g' || echo "1.0.0.r$(git rev-list --count HEAD).g$(git rev-parse --short=7 HEAD)"
+        git describe --long --tags 2>/dev/null | sed 's/^[vV]//;s/\([^-]*-g\)/r\1/;s/-/./g' || echo "2.0.0.r$(git rev-list --count HEAD).g$(git rev-parse --short=7 HEAD)"
     else
-        echo "1.0.0"
+        echo "2.0.0"
     fi
 }
 
