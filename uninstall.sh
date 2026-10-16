@@ -22,14 +22,11 @@ if [[ "${1:-}" != "--yes" && "${1:-}" != "-y" ]]; then
     fi
 fi
 
-# 1. Remove sudoers passwordless policy if installed
-if [ -f "/etc/sudoers.d/99-aura-pacman" ]; then
+# 1. Remove sudoers passwordless policy if installed (Note: /etc/sudoers.d is 0750 root:root on Arch)
+if sudo -n pacman -V &>/dev/null || [ -f "/etc/sudoers.d/99-aura-pacman" ]; then
     echo -e "${BLUE}==>${RESET} Removing passwordless sudoers policy (/etc/sudoers.d/99-aura-pacman)..."
-    if sudo -n true 2>/dev/null; then
-        sudo rm -f "/etc/sudoers.d/99-aura-pacman" || true
-    else
-        sudo rm -f "/etc/sudoers.d/99-aura-pacman" 2>/dev/null || true
-    fi
+    sudo rm -f "/etc/sudoers.d/99-aura-pacman" "/etc/sudoers.d/aura-pacman" 2>/dev/null || true
+    sudo -k 2>/dev/null || true
 fi
 
 # 2. Clean Hyprland config source line so Hyprland doesn't throw a missing file error

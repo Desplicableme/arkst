@@ -105,7 +105,7 @@ done
 # 5. Install Desktop Entry & Hyprland config
 echo -e "${BLUE}==>${RESET} Installing desktop launcher and window rules..."
 cp "${SCRIPT_DIR}/data/io.github.aura.desktop" "${APPLICATIONS_DIR}/io.github.aura.desktop"
-sed -i "s|Exec=aura %U|Exec=${BIN_DIR}/aura %U|g" "${APPLICATIONS_DIR}/io.github.aura.desktop"
+sed -i "s|^Exec=aura|Exec=${BIN_DIR}/aura|g" "${APPLICATIONS_DIR}/io.github.aura.desktop"
 mkdir -p "${INSTALL_DIR}/data"
 if [ -f "${SCRIPT_DIR}/data/hyprland-aura.conf" ]; then
     cp "${SCRIPT_DIR}/data/hyprland-aura.conf" "${INSTALL_DIR}/data/hyprland-aura.conf"

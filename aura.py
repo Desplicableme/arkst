@@ -36,7 +36,7 @@ class AuraApplication(Adw.Application):
     def do_activate(self):
         if not self.window:
             self.window = AuraWindow(self, self.pm)
-            self.window.connect("close-request", lambda w: self.quit())
+            self.window.connect("close-request", lambda w: self.quit() if not self.pm.has_active_tasks() else True)
             if self.initial_query:
                 self.window.search_entry.set_text(self.initial_query)
         self.window.present()
@@ -178,7 +178,7 @@ class AuraApplication(Adw.Application):
 
         if not self.window:
             self.window = AuraWindow(self, self.pm)
-            self.window.connect("close-request", lambda w: self.quit())
+            self.window.connect("close-request", lambda w: self.quit() if not self.pm.has_active_tasks() else True)
 
         if action == "discover":
             self.window.back_btn.set_visible(False)

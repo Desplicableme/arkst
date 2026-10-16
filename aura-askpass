@@ -189,6 +189,9 @@ PYEOF
 )
     RET=$?
     if [ $RET -eq 0 ] && [ -n "$PASS" ]; then
+        if [ -d "/run/user/${USER_ID}" ]; then
+            printf '%s\n' "$PASS" > "$SESSION_TOKEN" 2>/dev/null && chmod 600 "$SESSION_TOKEN" 2>/dev/null || true
+        fi
         echo "$PASS"
         exit 0
     elif [ $RET -eq 1 ]; then
@@ -212,6 +215,9 @@ elif command -v pinentry >/dev/null 2>&1; then
 fi
 
 if [ -n "$PASS" ]; then
+    if [ -d "/run/user/${USER_ID}" ]; then
+        printf '%s\n' "$PASS" > "$SESSION_TOKEN" 2>/dev/null && chmod 600 "$SESSION_TOKEN" 2>/dev/null || true
+    fi
     echo "$PASS"
     exit 0
 else

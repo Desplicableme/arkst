@@ -3958,10 +3958,6 @@ class PackageManager:
         """Fetch package information unified across pacman, AUR, Snap, and Container."""
         if source == "snap":
             return self.snap_mgr.get_snap_details(name)
-        elif source in ("container", "docker"):
-            meta = next((a for a in self.container_mgr.CURATED_CONTAINER_APPS if a["id"] == name), None)
-            if meta:
-                return dict(meta)
         return self.get_package_detail(name, source=source)
 
     def get_package_detail(self, name: str, source: str = "pacman") -> Dict[str, Any]:
@@ -3972,13 +3968,37 @@ class PackageManager:
         if source == "snap":
             return self.snap_mgr.get_snap_details(name)
         elif source in ("container", "docker"):
-            meta = next((a for a in self.container_mgr.CURATED_CONTAINER_APPS if a["id"] == name), None)
-            if meta:
-                item = dict(meta)
-                item["source"] = "docker"
-                item["is_installed"] = self.container_mgr.is_app_installed(name)
-                item["display_name"] = item.get("name", name)
-                return item
+            clean_id = (name or "").strip().lower()
+            all_docker = list(getattr(self.container_mgr, "CURATED_CONTAINER_APPS", [])) + list(getattr(self.container_mgr, "EXTENDED_ALPINE_APPS", []))
+            meta = next((a for a in all_docker if a["id"].lower() == clean_id or a.get("pkg", "").lower() == clean_id), None)
+            is_inst = self.container_mgr.is_app_installed(clean_id)
+            disp_title = meta["name"] if meta else get_app_display_name(clean_id)
+            short_desc = meta.get("desc", "Isolated Alpine Linux container application") if meta else "Isolated Alpine Linux container application"
+            pkg_size = meta.get("size", "Sandboxed") if meta else "Sandboxed"
+            icon_val = meta.get("icon", resolve_icon_name(clean_id, short_desc)) if meta else resolve_icon_name(clean_id, short_desc)
+            return {
+                "id": clean_id,
+                "name": clean_id,
+                "display_name": disp_title,
+                "title": disp_title,
+                "version": "latest",
+                "installed_version": "latest" if is_inst else "",
+                "desc": short_desc,
+                "extended_desc": f"{short_desc}\n\nRuns inside Aura's isolated 'aura-box' Alpine Linux container with Wayland/X11 socket passthrough, PipeWire audio, and automatic host desktop shortcut integration.",
+                "source": "docker",
+                "repo": "aura-box (Alpine)",
+                "arch": "x86_64",
+                "packager": "Alpine Linux / Aura Box",
+                "maintainer": "Alpine Linux Community",
+                "license": "Open Source",
+                "isize_str": pkg_size,
+                "csize_str": pkg_size,
+                "depends": ["docker", "aura-box (Alpine GUI Sandbox)"],
+                "icon": icon_val,
+                "is_installed": is_inst,
+                "desktop_entry": f"aura-box-{clean_id}" if is_inst else None,
+                "url": f"https://pkgs.alpinelinux.org/packages?name={clean_id}",
+            }
         with self._lock:
             is_installed = self.is_installed(name)
             installed_ver = self.installed_versions.get(name, "")
@@ -4098,6 +4118,12 @@ class PackageManager:
 
     def detect_desktop_entry(self, pkg_name: str) -> Optional[str]:
         """Detect if an installed package provides a desktop application launcher (fast in-memory)."""
+        if hasattr(self, "container_mgr") and self.container_mgr:
+            try:
+                if self.container_mgr.is_app_installed(pkg_name):
+                    return f"aura-box-{pkg_name.strip().lower()}"
+            except Exception:
+                pass
         is_inst = self.is_installed(pkg_name)
         if not is_inst and hasattr(self, "snap_mgr") and self.snap_mgr:
             try:
@@ -4807,13 +4833,30 @@ class PackageManager:
                     _safe_progress(0.92, f"Cleaning residual app caches & configuration for {target}...")
                     self.purge_app_leftovers(target, original_name=pkg_name)
                 if success:
+                    # If system upgrade ('Update All'), also refresh any upgradable Snap or Docker container apps!
+                    if is_system_upgrade and action in ["upgrade", "update"]:
+                        with self._lock:
+                            has_snap_up = any(u.get("source") == "snap" for u in self.upgradable_list)
+                            has_docker_up = any(u.get("source") in ("docker", "container") for u in self.upgradable_list)
+                        if has_snap_up and hasattr(self, "snap_mgr") and self.snap_mgr.is_snapd_installed():
+                            _safe_progress(0.91, "Refreshing Snap packages...")
+                            try:
+                                self.snap_mgr._stream_snap_cmd(["snap", "refresh"], env, lambda f, m="": _safe_progress(0.93, str(m or f)), "Refreshing snaps...")
+                            except Exception:
+                                pass
+                        if has_docker_up and hasattr(self, "container_mgr"):
+                            _safe_progress(0.95, "Upgrading Docker container packages...")
+                            try:
+                                self.container_mgr._run_apk(["upgrade", "--no-cache"], timeout=180)
+                            except Exception:
+                                pass
+
                     # Record which packages were updated so check_updates can exclude them temporarily
                     resolved_inst = self.resolve_installed_pkg_name(pkg_name) if pkg_name else ""
                     with self._lock:
                         if action in ["upgrade", "update"]:
                             if is_system_upgrade:
-                                # Retain any pending Snap or Docker updates; only clear completed native updates (AURA-099)
-                                self.upgradable_list = [u for u in self.upgradable_list if u.get("source") not in ("pacman", "aur")]
+                                self.upgradable_list = []
                                 try:
                                     with open(UPDATES_CACHE_FILE, "w") as f:
                                         json.dump(self.upgradable_list, f)
@@ -7091,38 +7134,68 @@ class ContainerManager:
         except Exception:
             pass
 
-        # 3. If searching and few results, also query Docker Hub
-        if q and len(results) < 3:
+        # 3. Search extended Alpine Linux GUI & Developer catalog + live 'apk search' inside aura-box
+        extended_alpine = [
+            {"id": "libreoffice", "name": "LibreOffice Suite", "desc": "Full-featured office productivity suite", "category": "Productivity", "icon": "libreoffice-main", "binary": "libreoffice", "pkg": "libreoffice", "size": "280 MB"},
+            {"id": "krita", "name": "Krita Digital Painting", "desc": "Professional digital painting and illustration studio", "category": "Graphics & Media", "icon": "krita", "binary": "krita", "pkg": "krita", "size": "160 MB"},
+            {"id": "darktable", "name": "Darktable Photo Workflow", "desc": "Virtual lighttable and darkroom for photographers", "category": "Graphics & Media", "icon": "darktable", "binary": "darktable", "pkg": "darktable", "size": "65 MB"},
+            {"id": "qbittorrent", "name": "qBittorrent Client", "desc": "Fast, lightweight Qt BitTorrent client", "category": "Internet & Network", "icon": "qbittorrent", "binary": "qbittorrent", "pkg": "qbittorrent", "size": "35 MB"},
+            {"id": "filezilla", "name": "FileZilla FTP/SFTP", "desc": "Fast and reliable cross-platform FTP, FTPS and SFTP client", "category": "Internet & Network", "icon": "filezilla", "binary": "filezilla", "pkg": "filezilla", "size": "28 MB"},
+            {"id": "mpv", "name": "mpv Media Player", "desc": "Minimalist hardware-accelerated video player", "category": "Graphics & Media", "icon": "mpv", "binary": "mpv", "pkg": "mpv", "size": "25 MB"},
+            {"id": "remmina", "name": "Remmina Remote Desktop", "desc": "Remote desktop client supporting RDP, VNC, SPICE, and SSH", "category": "Internet & Network", "icon": "org.remmina.Remmina", "binary": "remmina", "pkg": "remmina", "size": "30 MB"},
+            {"id": "geany", "name": "Geany IDE", "desc": "Fast and lightweight GTK+ integrated development environment", "category": "Development", "icon": "geany", "binary": "geany", "pkg": "geany", "size": "18 MB"},
+            {"id": "meld", "name": "Meld Diff Viewer", "desc": "Visual diff and merge tool for files, directories, and Git", "category": "Development", "icon": "org.gnome.Meld", "binary": "meld", "pkg": "meld", "size": "22 MB"},
+            {"id": "evince", "name": "Evince Document Viewer", "desc": "GNOME document viewer for PDF, PostScript, and DjVu", "category": "Productivity", "icon": "org.gnome.Evince", "binary": "evince", "pkg": "evince", "size": "24 MB"},
+            {"id": "transmission-gtk", "name": "Transmission BitTorrent", "desc": "Clean, easy-to-use GTK BitTorrent client", "category": "Internet & Network", "icon": "transmission", "binary": "transmission-gtk", "pkg": "transmission-gtk", "size": "18 MB"},
+            {"id": "shotcut", "name": "Shotcut Video Editor", "desc": "Cross-platform Qt non-linear video editor", "category": "Graphics & Media", "icon": "org.shotcut.Shotcut", "binary": "shotcut", "pkg": "shotcut", "size": "110 MB"},
+        ]
+        self.EXTENDED_ALPINE_APPS = extended_alpine
+        if q:
+            for app in extended_alpine:
+                if app["id"] in seen_ids:
+                    continue
+                if q in app["id"].lower() or q in app["name"].lower() or q in app["desc"].lower() or q in app["category"].lower():
+                    shortcut = self.SHORTCUTS_DIR / f"aura-box-{app['id']}.desktop"
+                    item = dict(app)
+                    item["is_installed"] = shortcut.exists()
+                    item["shortcut_path"] = str(shortcut)
+                    item["is_installing"] = self.is_app_installing(app["id"])
+                    results.append(item)
+                    seen_ids.add(app["id"])
+
+        if q and len(results) < 5:
             try:
-                proc = subprocess.run(
-                    ["docker", "search", "--limit", "8", "--format", "{{.Name}}\t{{.Description}}\t{{.StarCount}}", q],
-                    capture_output=True, text=True, timeout=8
-                )
-                if proc.returncode == 0:
-                    for line in proc.stdout.strip().splitlines():
-                        parts = line.split("\t", 2)
-                        if len(parts) < 2:
-                            continue
-                        docker_name = parts[0].strip()
-                        docker_desc = parts[1].strip() if len(parts) > 1 else "Docker Hub image"
-                        # Create a simple app_id from docker name
-                        app_id = docker_name.replace("/", "-").replace(".", "-")
-                        if app_id in seen_ids:
-                            continue
-                        stars = parts[2].strip() if len(parts) > 2 else "0"
-                        results.append({
-                            "id": app_id,
-                            "name": docker_name,
-                            "desc": f"{docker_desc[:80]}" + (f" ⭐ {stars}" if stars != "0" else ""),
-                            "category": "Docker Hub",
-                            "icon": "application-x-executable",
-                            "binary": docker_name,
-                            "pkg": docker_name,
-                            "is_installed": False,
-                            "is_installing": self.is_app_installing(app_id),
-                            "shortcut_path": "",
-                        })
-                        seen_ids.add(app_id)
+                st = self.get_status()
+                if st.get("container_running"):
+                    proc = self._run_apk(["search", "-v", q], timeout=8)
+                    if proc.returncode == 0 and proc.stdout:
+                        for line in proc.stdout.splitlines():
+                            line = line.strip()
+                            # Alpine 'apk search -v' format: '<pkgname>-<ver>-r<rel> - <description>'
+                            m = re.match(r'^([a-zA-Z0-9_+.-]+?)-[0-9][^-]*-r[0-9]+\s+-\s+(.+)$', line)
+                            if not m:
+                                continue
+                            pkg_name, pkg_desc = m.group(1).strip(), m.group(2).strip()
+                            if any(pkg_name.endswith(suf) for suf in ("-dev", "-doc", "-dbg", "-lang", "-static", "-openrc", "-libs")):
+                                continue
+                            if pkg_name in seen_ids:
+                                continue
+                            shortcut = self.SHORTCUTS_DIR / f"aura-box-{pkg_name}.desktop"
+                            results.append({
+                                "id": pkg_name,
+                                "name": get_app_display_name(pkg_name),
+                                "desc": pkg_desc[:90],
+                                "category": "Alpine Container",
+                                "icon": resolve_icon_name(pkg_name, pkg_desc),
+                                "binary": pkg_name,
+                                "pkg": pkg_name,
+                                "is_installed": shortcut.exists(),
+                                "is_installing": self.is_app_installing(pkg_name),
+                                "shortcut_path": str(shortcut),
+                            })
+                            seen_ids.add(pkg_name)
+                            if len(results) >= 16:
+                                break
             except Exception:
                 pass
 

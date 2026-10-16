@@ -603,7 +603,6 @@ scrolledwindow viewport {
 
 .mac-hero-watermark {
     opacity: 0.13;
-    animation: aura-watermark-drift 7s ease-in-out infinite;
 }
 
 .mac-hero-tag {
@@ -636,7 +635,6 @@ scrolledwindow viewport {
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
     padding: 0;
     margin: 0;
-    animation: aura-hero-float 5s ease-in-out infinite;
     transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 240ms ease;
 }
 
@@ -657,7 +655,6 @@ button.mac-hero-nav-btn,
     border-radius: 9999px;
     background: rgba(20, 20, 25, 0.65);
     border: 1px solid rgba(255, 255, 255, 0.18);
-    backdrop-filter: blur(12px);
     color: #ffffff;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
     transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -2519,8 +2516,12 @@ class MacHeroCarousel(Gtk.Overlay):
         self._is_hovered = False
 
     def _auto_advance(self) -> bool:
-        if not self._is_hovered:
-            self._next_slide()
+        if not self._is_hovered and hasattr(self.aura_window, "main_stack"):
+            if self.aura_window.main_stack.get_visible_child_name() == "discover":
+                sw = getattr(self.aura_window, "discover_page", None)
+                vadj = sw.get_vadjustment() if sw else None
+                if not vadj or vadj.get_value() < 220:
+                    self._next_slide()
         return True
 
     def _on_destroy(self, *args):
@@ -5109,17 +5110,27 @@ class AuraWindow(Adw.ApplicationWindow):
 
         card.append(btn_box)
 
+        primary_btn = btn_get if btn_get is not None else (btn_inst if is_installing else btn_open)
+        card._action_btn = primary_btn
+        card._pkg_name = app_id
+        card._source = "docker"
+        if hasattr(self, "_registered_cards"):
+            self._registered_cards.setdefault(app_id.strip().lower(), []).append(card)
+
         card.set_cursor(Gdk.Cursor.new_from_name("pointer"))
-        def _on_card_click(gesture, n_press, x, y):
-            if app.get("is_installing") or self.pm.container_mgr.is_app_installing(app_id):
-                self.show_toast(f"{app['name']} is currently installing in the background...")
+        def _on_card_click(gesture, n_press, x, y, aid=app_id):
+            picked = card.pick(x, y, Gtk.PickFlags.INSENSITIVE)
+            if picked is not None and (picked == btn_box or btn_box.is_ancestor(picked)):
                 return
-            if is_installed:
-                self.show_toast(f"Launching {app['name']}...")
-                self.pm.container_mgr.launch_app(app_id)
-            else:
-                self._confirm_container_install(app_id, app["name"], btn_get)
-        
+            alloc = btn_box.compute_bounds(card)
+            if alloc[0]:
+                rect = alloc[1]
+                rx, ry = rect.get_x(), rect.get_y()
+                rw, rh = rect.get_width(), rect.get_height()
+                if rx <= x <= rx + rw and ry <= y <= ry + rh:
+                    return
+            self._open_package_detail(aid, "docker")
+
         card_gesture = Gtk.GestureClick()
         card_gesture.connect("released", _on_card_click)
         card.add_controller(card_gesture)
@@ -6883,6 +6894,9 @@ class AuraWindow(Adw.ApplicationWindow):
         if source == "snap":
             repo_name = "Canonical Snap Store"
             self.detail_meta.set_text(f"{name} • {repo_name} • Sandboxed Package")
+        elif source in ("docker", "container"):
+            repo_name = "Docker App Sandbox (aura-box)"
+            self.detail_meta.set_text(f"{name} • {repo_name} • Isolated Alpine Container")
         elif source == "deb":
             repo_name = "Debian (.deb) Native Bridge"
             self.detail_meta.set_text(f"{name} • {repo_name} • Pacman Tracked")
@@ -6996,13 +7010,15 @@ class AuraWindow(Adw.ApplicationWindow):
         self.detail_subtitle.set_text(desc)
         if source == "snap":
             repo_text = "Canonical Snap Store"
+        elif source in ("docker", "container"):
+            repo_text = "Docker App Sandbox (aura-box)"
         elif source == "deb":
             repo_text = "Debian (.deb) Native Bridge"
         elif source == "pacman":
             repo_text = "Official System Repository"
         else:
             repo_text = "Community Repository (AUR)"
-        self.detail_meta.set_text(f"{name} • {repo_text} • Free & Open Source" if source != "snap" else f"{name} • {repo_text} • Sandboxed Package")
+        self.detail_meta.set_text(f"{name} • {repo_text} • Sandboxed Package" if source in ("snap", "docker", "container") else f"{name} • {repo_text} • Free & Open Source")
 
         # Stats Strip
         raw_dev = d.get("packager") or d.get("maintainer") or "Open Source Community"
@@ -7010,6 +7026,8 @@ class AuraWindow(Adw.ApplicationWindow):
         self.stat_val_dev.set_text(dev_clean)
         if source == "snap":
             repo_clean = "Snap Store"
+        elif source in ("docker", "container"):
+            repo_clean = "Docker Box"
         elif source == "deb":
             repo_clean = ".deb Bridge"
         elif source == "pacman":
@@ -7203,6 +7221,8 @@ class AuraWindow(Adw.ApplicationWindow):
         # Specifications Table
         if source == "pacman":
             spec_repo = f"Official · {repo}"
+        elif source in ("docker", "container"):
+            spec_repo = "Docker App Sandbox (Alpine Linux)"
         elif source == "deb":
             spec_repo = "Debian (.deb) Native Bridge"
         elif source == "snap":
@@ -7229,11 +7249,16 @@ class AuraWindow(Adw.ApplicationWindow):
     def _launch_app(self):
         if not getattr(self, "_current_detail", None):
             return
+        name = self._current_detail.get("name", "")
+        source = self._current_detail.get("source", "pacman")
+        disp = self._current_detail.get("display_name") or get_app_display_name(name)
+        if source in ("docker", "container") and hasattr(self.pm, "container_mgr"):
+            self.pm.container_mgr.launch_app(name)
+            self.show_toast(f"Launching {disp} (Docker Sandbox)...")
+            return
         desktop_entry = self._current_detail.get("desktop_entry")
         if desktop_entry:
             self.pm.launch_desktop_app(desktop_entry)
-            name = self._current_detail.get('name', '')
-            disp = self._current_detail.get('display_name') or get_app_display_name(name)
             self.show_toast(f"Launching {disp}...")
 
     # =========================================================================
