@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Aura Package Hub - Backend Module
+Ark Store (ArkST Software Center) - Backend Module
 Handles:
 - Pacman local repository database indexing & caching
 - Installed package querying & status tracking
@@ -35,16 +35,16 @@ def _resolve_writable_dir(preferred: Path, fallback_name: str) -> Path:
         preferred.mkdir(parents=True, exist_ok=True)
         return preferred
     except Exception:
-        fb = Path(tempfile.gettempdir()) / f"aura-{os.getuid()}-{fallback_name}"
+        fb = Path(tempfile.gettempdir()) / f"arkst-{os.getuid()}-{fallback_name}"
         fb.mkdir(parents=True, exist_ok=True)
         return fb
 
 CACHE_DIR = _resolve_writable_dir(
-    Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "aura",
+    Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "arkst",
     "cache"
 )
 DATA_DIR = _resolve_writable_dir(
-    Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "aura",
+    Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "arkst",
     "data"
 )
 CACHE_FILE = CACHE_DIR / "sync_cache.pkl"
@@ -53,11 +53,11 @@ FEATURED_STATE_FILE = CACHE_DIR / "featured_state.json"
 SYNC_DIR = Path("/var/lib/pacman/sync")
 
 def get_askpass_script() -> Path:
-    """Dynamically resolve executable aura-askpass helper across dev, local, and system paths."""
+    """Dynamically resolve executable arkst-askpass helper across dev, local, and system paths."""
     candidates = [
-        Path(__file__).resolve().parent / "aura-askpass",
-        Path.home() / ".local" / "share" / "aura" / "aura-askpass",
-        Path("/usr/lib/aura/aura-askpass"),
+        Path(__file__).resolve().parent / "arkst-askpass",
+        Path.home() / ".local" / "share" / "arkst" / "arkst-askpass",
+        Path("/usr/lib/arkst/arkst-askpass"),
     ]
     for c in candidates:
         if c.exists() and os.access(c, os.X_OK):
@@ -1489,6 +1489,125 @@ _DESKTOP_ICONS_CACHE: Dict[str, str] = {}
 _DESKTOP_NAMES_CACHE: Dict[str, str] = {}
 _DESKTOP_ENTRIES_CACHE: Dict[str, str] = {}
 
+DESKTOP_SEARCH_DIRS: List[Path] = [
+    Path("/usr/share/applications"),
+    Path(os.path.expanduser("~/.local/share/applications")),
+    Path("/var/lib/flatpak/exports/share/applications"),
+    Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications")),
+    Path("/var/lib/snapd/desktop/applications"),
+    Path("/snap/share/applications"),
+]
+
+
+def invalidate_desktop_caches():
+    """Clear cached .desktop icon, name, and launcher mappings so newly installed apps are immediately discoverable."""
+    global _DESKTOP_ICONS_CACHE, _DESKTOP_NAMES_CACHE, _DESKTOP_ENTRIES_CACHE, _CURATED_DESKTOP_SET
+    _DESKTOP_ICONS_CACHE = {}
+    _DESKTOP_NAMES_CACHE = {}
+    _DESKTOP_ENTRIES_CACHE = {}
+    _CURATED_DESKTOP_SET = None
+
+
+def get_gui_launch_env() -> Dict[str, str]:
+    """Build a complete Wayland/X11/XDG environment for launching desktop, Flatpak, Snap, and Docker GUI apps."""
+    env = os.environ.copy()
+    uid = os.getuid()
+    runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+    env["XDG_RUNTIME_DIR"] = runtime_dir
+
+    # Auto-detect WAYLAND_DISPLAY if missing
+    if not env.get("WAYLAND_DISPLAY"):
+        rt_path = Path(runtime_dir)
+        if rt_path.exists():
+            for cand in ("wayland-1", "wayland-0"):
+                if (rt_path / cand).exists():
+                    env["WAYLAND_DISPLAY"] = cand
+                    break
+            else:
+                wl_socks = sorted(rt_path.glob("wayland-*"))
+                for ws in wl_socks:
+                    if not ws.name.endswith(".lock"):
+                        env["WAYLAND_DISPLAY"] = ws.name
+                        break
+
+    # Auto-detect DISPLAY if missing
+    if not env.get("DISPLAY"):
+        x11_dir = Path("/tmp/.X11-unix")
+        if x11_dir.exists():
+            for cand in ("X0", "X1"):
+                if (x11_dir / cand).exists():
+                    env["DISPLAY"] = f":{cand[1:]}"
+                    break
+            else:
+                x_socks = sorted(x11_dir.glob("X*"))
+                if x_socks:
+                    env["DISPLAY"] = f":{x_socks[0].name[1:]}"
+        if not env.get("DISPLAY"):
+            env["DISPLAY"] = ":0"
+
+    # Ensure PATH includes /snap/bin and ~/.local/bin
+    path_parts = [p for p in env.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin").split(":") if p]
+    for extra_p in (
+        str(Path.home() / ".local" / "share" / "arkst" / "bin"),
+        str(Path.home() / ".local" / "bin"),
+        "/snap/bin",
+        "/var/lib/snapd/snap/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+    ):
+        if extra_p not in path_parts:
+            path_parts.append(extra_p)
+    env["PATH"] = ":".join(path_parts)
+
+    # Ensure XDG_DATA_DIRS includes Flatpak and Snap exports so gtk-launch / gio / IconTheme always work
+    xdg_parts = [p for p in env.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if p]
+    for extra_d in (
+        str(Path.home() / ".local" / "share"),
+        str(Path.home() / ".local" / "share" / "flatpak" / "exports" / "share"),
+        "/var/lib/flatpak/exports/share",
+        "/var/lib/snapd/desktop",
+        "/usr/local/share",
+        "/usr/share",
+    ):
+        if extra_d not in xdg_parts:
+            xdg_parts.append(extra_d)
+    env["XDG_DATA_DIRS"] = ":".join(xdg_parts)
+    return env
+
+
+def _extract_exec_binary(exec_line: str) -> str:
+    """Extract the real binary/command name from a .desktop Exec= line (skipping env VAR=VAL wrappers)."""
+    if not exec_line:
+        return ""
+    try:
+        import shlex
+        tokens = shlex.split(exec_line)
+    except Exception:
+        tokens = [t.strip('"').strip("'") for t in exec_line.split()]
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        base_tok = os.path.basename(tok)
+        if base_tok == "env":
+            idx += 1
+            continue
+        if "=" in tok and not tok.startswith(("/", ".", "-")):
+            idx += 1
+            continue
+        if base_tok in ("sh", "bash", "dash") and idx + 2 < len(tokens) and tokens[idx + 1] == "-c":
+            return _extract_exec_binary(tokens[idx + 2])
+        if base_tok == "flatpak" and "run" in tokens[idx:]:
+            # Last non-option token before field codes is the AppStream ID
+            for sub_tok in reversed(tokens[idx + 1:]):
+                if not sub_tok.startswith("-") and not sub_tok.startswith("%") and "." in sub_tok:
+                    return sub_tok
+        if base_tok == "snap" and idx + 2 < len(tokens) and tokens[idx + 1] == "run":
+            for sub_tok in tokens[idx + 2:]:
+                if not sub_tok.startswith("-") and not sub_tok.startswith("%"):
+                    return sub_tok
+        return tok
+    return ""
+
 
 def get_desktop_icons_map() -> Dict[str, str]:
     """Index system .desktop files to resolve authentic application icons and launchers."""
@@ -1499,12 +1618,7 @@ def get_desktop_icons_map() -> Dict[str, str]:
     mapping = {}
     names_mapping = {}
     entries_mapping = {}
-    search_dirs = [
-        Path("/usr/share/applications"),
-        Path(os.path.expanduser("~/.local/share/applications")),
-        Path("/var/lib/snapd/desktop/applications"),
-        Path("/snap/share/applications"),
-    ]
+    search_dirs = DESKTOP_SEARCH_DIRS
     for d in search_dirs:
         if not d.exists():
             continue
@@ -1524,32 +1638,41 @@ def get_desktop_icons_map() -> Dict[str, str]:
                             c_exec = line.strip().split("=", 1)[1]
                         if c_icon and c_name and c_exec:
                             break
-                if c_icon:
-                    mapping[base] = c_icon
-                    if "." in base:
-                        mapping[base.split(".")[-1]] = c_icon
-                if c_name:
-                    names_mapping[base] = c_name
-                    if "." in base:
-                        names_mapping[base.split(".")[-1]] = c_name
-                # Launcher entries mapping
-                entries_mapping[base] = p.stem
+                alias_keys = [base]
                 if "." in base:
-                    entries_mapping[base.split(".")[-1]] = p.stem
+                    alias_keys.append(base.split(".")[-1])
+                if "_" in base:
+                    # Snap desktop files use <snap>_<app>.desktop (e.g. vlc_vlc.desktop)
+                    alias_keys.append(base.split("_")[0])
+                if base.startswith("arkst-box-"):
+                    alias_keys.append(base[len("arkst-box-"):])
+
+                if c_icon:
+                    for ak in alias_keys:
+                        if ak and ak not in mapping:
+                            mapping[ak] = c_icon
+                if c_name:
+                    for ak in alias_keys:
+                        if ak and ak not in names_mapping:
+                            names_mapping[ak] = c_name
+                # Launcher entries mapping (exact stem matches strictly supersede secondary auxiliary launchers)
+                for ak in alias_keys:
+                    if ak and (ak not in entries_mapping or p.stem.lower() == ak):
+                        entries_mapping[ak] = p.stem
                 bin_name = ""
                 if c_exec:
-                    clean_exec = c_exec.split()[0].strip('"').strip("'")
+                    clean_exec = _extract_exec_binary(c_exec)
                     bin_name = os.path.basename(clean_exec).lower()
-                    if bin_name and bin_name not in entries_mapping:
+                    if bin_name and (bin_name not in entries_mapping or p.stem.lower() == bin_name):
                         entries_mapping[bin_name] = p.stem
-                for key in [base, bin_name]:
+                for key in alias_keys + [bin_name]:
                     if not key:
                         continue
                     clean = re.sub(r'-(bin|launcher|desktop|oss|browser|git|app|gtk-app|qt-app)$', '', key)
-                    if clean and clean not in entries_mapping:
+                    if clean and (clean not in entries_mapping or p.stem.lower() == clean):
                         entries_mapping[clean] = p.stem
                     clean_nodash = clean.replace("-", "")
-                    if clean_nodash and clean_nodash not in entries_mapping:
+                    if clean_nodash and (clean_nodash not in entries_mapping or p.stem.lower() == clean_nodash):
                         entries_mapping[clean_nodash] = p.stem
             except Exception:
                 pass
@@ -1896,7 +2019,7 @@ def fuzzy_score(
     is_installed: bool = False
 ) -> int:
     """
-    Tiered Multi-Level Scoring Engine for Aura Store:
+    Tiered Multi-Level Scoring Engine for ArkST:
       Tier 1: Exact Name Match: 10,000 points
       Tier 2: Exact Normalized Match: 9,000 points
       Tier 3: Prefix Match on Name: 7,000 - min(500, len(name)*10)
@@ -2490,8 +2613,11 @@ class PackageManager:
         self._update_lock = threading.Lock()
         self.is_checking_updates = False
         self.updates_checked = False
+        self._active_flatpak_tx: Optional[Dict[str, Any]] = None
+        self._pending_flatpak_actions: List[Dict[str, Any]] = []
         self.container_mgr = ContainerManager()
         self.snap_mgr = SnapManager()
+        self.flatpak_mgr = FlatpakManager()
         self.cache_mgr = CacheManager()
         self._desktop_owner_map: Dict[str, str] = {}
         self._binary_owner_map: Dict[str, str] = {}
@@ -2523,6 +2649,12 @@ class PackageManager:
                 pass
             try:
                 self.container_mgr.get_status()
+                self.container_mgr.repair_existing_shortcuts()
+            except Exception:
+                pass
+            try:
+                self.flatpak_mgr.get_status()
+                self.flatpak_mgr.get_installed_flatpaks()
             except Exception:
                 pass
         threading.Thread(target=_prewarm_managers, daemon=True).start()
@@ -2635,7 +2767,7 @@ class PackageManager:
             _DESKTOP_NAMES_CACHE = {}
             _DESKTOP_ENTRIES_CACHE = {}
         except Exception as e:
-            print(f"[Aura] Error loading installed packages: {e}", file=sys.stderr)
+            print(f"[ArkST] Error loading installed packages: {e}", file=sys.stderr)
 
     def resolve_installed_pkg_name(self, name: str) -> str:
         """
@@ -2808,11 +2940,26 @@ class PackageManager:
                 return True
         return False
 
-    def get_active_transaction(self) -> Optional[Dict[str, Any]]:
-        """Returns a copy of self.active_transaction safely under lock."""
+    def get_active_transaction(self, pkg_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Returns a copy of self.active_transaction or matching engine transaction safely under lock."""
         with self._action_lock:
+            all_txs = [
+                tx for tx in (
+                    self.active_transaction,
+                    getattr(self, "_active_snap_tx", None),
+                    getattr(self, "_active_flatpak_tx", None),
+                    getattr(self, "_active_docker_tx", None),
+                ) if tx is not None
+            ]
+            if pkg_name:
+                key = pkg_name.strip().lower()
+                for tx in all_txs:
+                    if (tx.get("pkg_name") or "").strip().lower() == key or (tx.get("current_pkg") or "").strip().lower() == key:
+                        return dict(tx)
             if self.active_transaction is not None:
                 return dict(self.active_transaction)
+            if all_txs:
+                return dict(all_txs[0])
             return None
 
     def is_pkg_updating(self, pkg_name: str) -> bool:
@@ -2863,12 +3010,18 @@ class PackageManager:
         if hasattr(self, "snap_mgr") and self.snap_mgr:
             if target in getattr(self.snap_mgr, "active_snap_ops", {}):
                 return True
+        if hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+            if target in getattr(self.flatpak_mgr, "active_flatpak_ops", {}):
+                return True
+            resolved_fp = self.flatpak_mgr.resolve_flatpak_id(target).lower()
+            if resolved_fp in getattr(self.flatpak_mgr, "active_flatpak_ops", {}):
+                return True
         if hasattr(self, "deb_mgr") and self.deb_mgr:
             if target in getattr(self.deb_mgr, "active_deb_installs", {}):
                 return True
 
         with self._action_lock:
-            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None)):
+            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None), getattr(self, "_active_flatpak_tx", None)):
                 if not tx or tx.get("is_completed"):
                     continue
                 tx_pkg = (tx.get("pkg_name") or "").strip().lower()
@@ -2982,6 +3135,8 @@ class PackageManager:
             return True
         if getattr(self.container_mgr, "is_configuring", False) or bool(getattr(self.container_mgr, "active_container_installs", None)):
             return True
+        if hasattr(self, "flatpak_mgr") and (getattr(self.flatpak_mgr, "is_setting_up", False) or bool(getattr(self.flatpak_mgr, "active_flatpak_ops", None))):
+            return True
         if hasattr(self, "deb_mgr") and bool(getattr(self.deb_mgr, "active_deb_installs", None)):
             return True
         return False
@@ -2997,11 +3152,17 @@ class PackageManager:
                 return self.snap_mgr.active_snap_ops[target]
             if hasattr(self, "container_mgr") and target in getattr(self.container_mgr, "active_container_progress", {}):
                 return self.container_mgr.active_container_progress[target]
+            if hasattr(self, "flatpak_mgr"):
+                if target in getattr(self.flatpak_mgr, "active_flatpak_ops", {}):
+                    return self.flatpak_mgr.active_flatpak_ops[target]
+                fp_id = self.flatpak_mgr.resolve_flatpak_id(target).lower()
+                if fp_id in getattr(self.flatpak_mgr, "active_flatpak_ops", {}):
+                    return self.flatpak_mgr.active_flatpak_ops[fp_id]
             if hasattr(self, "deb_mgr") and target in getattr(self.deb_mgr, "active_deb_installs", {}):
                 return self.deb_mgr.active_deb_installs[target]
 
         with self._action_lock:
-            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None)):
+            for tx in (self.active_transaction, getattr(self, "_active_snap_tx", None), getattr(self, "_active_docker_tx", None), getattr(self, "_active_flatpak_tx", None)):
                 if not tx:
                     continue
                 if pkg_name is not None:
@@ -3041,6 +3202,9 @@ class PackageManager:
         search_dirs = [
             Path("/usr/share/applications"),
             Path(os.path.expanduser("~/.local/share/applications")),
+            Path("/var/lib/flatpak/exports/share/applications"),
+            Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications")),
+            Path("/var/lib/snapd/desktop/applications"),
         ]
         ignored_stems = {
             "bssh", "bvnc", "avahi-discover", "xfce4-about", "thunar-bulk-rename",
@@ -3089,9 +3253,17 @@ class PackageManager:
                     continue
                 seen.add(clean_key)
 
-                # 1. Detect Docker sandbox shortcuts created by Aura
-                if stem.startswith("aura-box-"):
-                    docker_app_id = p.stem[len("aura-box-"):]
+                # 0. Purge any leftover legacy aura-box-* or ark-box-* shortcuts so they never show up
+                if stem.startswith(("aura-box-", "ark-box-")) or "aura-box" in exec_cmd:
+                    try:
+                        p.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    continue
+
+                # 1. Detect Docker sandbox shortcuts created by ArkST
+                if stem.startswith("arkst-box-"):
+                    docker_app_id = p.stem[len("arkst-box-"):]
                     apps.append({
                         "name": docker_app_id,
                         "display_name": name,
@@ -3133,15 +3305,21 @@ class PackageManager:
                         else:
                             pkg_name = clean_id if clean_id in self.installed_set else stem
 
-                # 3. Determine accurate source (deb, aur, snap, pacman)
+                # 3. Determine accurate source (flatpak, snap, deb, aur, pacman)
                 app_source = "pacman"
-                if hasattr(self, "deb_mgr") and self.deb_mgr and self.deb_mgr.is_deb_installed(pkg_name):
+                if "flatpak" in str(p).lower() or (pkg_name not in self.installed_set and hasattr(self, "flatpak_mgr") and self.flatpak_mgr.is_flatpak_app_installed(p.stem)):
+                    app_source = "flatpak"
+                    pkg_name = p.stem
+                elif "snapd" in str(p).lower() or "/snap/" in exec_cmd or ( "_" in p.stem and hasattr(self, "snap_mgr") and self.snap_mgr.is_snap_installed(p.stem.split("_")[0])):
+                    app_source = "snap"
+                    pkg_name = p.stem.split("_")[0]
+                elif hasattr(self, "deb_mgr") and self.deb_mgr and self.deb_mgr.is_deb_installed(pkg_name):
                     app_source = "deb"
                 elif pkg_name in self.packages:
                     p_meta = self.packages[pkg_name]
                     if p_meta.get("source") == "deb" or p_meta.get("repo") == "deb-local":
                         app_source = "deb"
-                    elif p_meta.get("repo") == "local":
+                    elif p_meta.get("repo") == "local" or p_meta.get("source") == "aur":
                         app_source = "aur"
                 elif pkg_name not in self.installed_set and hasattr(self, "snap_mgr") and self.snap_mgr.is_snap_installed(pkg_name):
                     app_source = "snap"
@@ -3349,7 +3527,7 @@ class PackageManager:
                             "icon": resolve_icon_name(pkg_name)
                         })
         except Exception as e:
-            print(f"[Aura] Update check: {e}", file=sys.stderr)
+            print(f"[ArkST] Update check: {e}", file=sys.stderr)
 
         # Fallback to pacman -Qu if checkupdates failed or is unavailable
         if not pacman_checked:
@@ -3391,7 +3569,7 @@ class PackageManager:
                                 "icon": resolve_icon_name(pkg_name)
                             })
             except Exception as e:
-                print(f"[Aura] AUR update check: {e}", file=sys.stderr)
+                print(f"[ArkST] AUR update check: {e}", file=sys.stderr)
 
         if not aur_checked:
             try:
@@ -3405,7 +3583,7 @@ class PackageManager:
                     if foreign_pkgs:
                         args_q = "&".join(f"arg[]={urllib.parse.quote(k)}" for k in list(foreign_pkgs.keys())[:100])
                         rpc_url = f"https://aur.archlinux.org/rpc/v5/info?{args_q}"
-                        req = urllib.request.Request(rpc_url, headers={"User-Agent": "Aura-PackageHub/3.0"})
+                        req = urllib.request.Request(rpc_url, headers={"User-Agent": "ArkST-PackageHub/3.0"})
                         with urllib.request.urlopen(req, timeout=5) as resp:
                             rpc_data = json.loads(resp.read().decode("utf-8"))
                             for item in rpc_data.get("results", []):
@@ -3439,7 +3617,16 @@ class PackageManager:
             if snap_updates:
                 updates.extend(snap_updates)
         except Exception as e:
-            print(f"[Aura] Snap update check: {e}", file=sys.stderr)
+            print(f"[ArkST] Snap update check: {e}", file=sys.stderr)
+
+        # Merge Flatpak / Flathub updates
+        try:
+            if hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+                flatpak_updates = self.flatpak_mgr.check_flatpak_updates()
+                if flatpak_updates:
+                    updates.extend(flatpak_updates)
+        except Exception as e:
+            print(f"[Ark] Flatpak update check: {e}", file=sys.stderr)
 
         # Merge Container updates
         try:
@@ -3447,7 +3634,7 @@ class PackageManager:
             if container_updates:
                 updates.extend(container_updates)
         except Exception as e:
-            print(f"[Aura] Container update check: {e}", file=sys.stderr)
+            print(f"[ArkST] Container update check: {e}", file=sys.stderr)
 
         self.is_checking_updates = False
         self.updates_checked = True
@@ -3466,7 +3653,20 @@ class PackageManager:
         with self._lock:
             # Concurrency guard: only commit if newer check hasn't superseded this generation
             if gen == self._update_generation:
-                self.upgradable_list = updates
+                if not pacman_checked and (Path("/var/lib/pacman/db.lck").exists() or self.has_active_tasks()):
+                    # Pacman is currently locked/busy installing a package; merge and retain previous pacman/aur updates
+                    prev_pacman = [u for u in self.upgradable_list if u.get("source") in ("pacman", "aur")]
+                    new_non_pacman = [u for u in updates if u.get("source") not in ("pacman", "aur")]
+                    active_tx = getattr(self, "active_transaction", None)
+                    active_pkg = (active_tx.get("pkg_name") or "").strip().lower() if isinstance(active_tx, dict) else ""
+                    if active_pkg:
+                        prev_pacman = [u for u in prev_pacman if u.get("name", "").strip().lower() != active_pkg]
+                    self.upgradable_list = prev_pacman + new_non_pacman
+                    updates = list(self.upgradable_list)
+                elif updates or pacman_checked or aur_checked or not self.upgradable_list:
+                    self.upgradable_list = updates
+                else:
+                    updates = list(self.upgradable_list)
                 try:
                     with open(UPDATES_CACHE_FILE, "w") as f:
                         json.dump(updates, f)
@@ -3512,7 +3712,7 @@ class PackageManager:
                                 self.is_loaded = True
                             return
                 except Exception as e:
-                    print(f"[Aura] Cache read error, rebuilding: {e}", file=sys.stderr)
+                    print(f"[ArkST] Cache read error, rebuilding: {e}", file=sys.stderr)
 
             def _parse_desc_text(raw_desc: str, repo_name: str, src_type: str = "pacman") -> Optional[Dict[str, Any]]:
                 content = raw_desc.split("\n\n")
@@ -3575,7 +3775,7 @@ class PackageManager:
                         except Exception:
                             pass
                     if not parsed_this_db:
-                        print(f"[Aura] Error parsing {db_file}: {e}", file=sys.stderr)
+                        print(f"[ArkST] Error parsing {db_file}: {e}", file=sys.stderr)
 
             # Also index locally installed packages (/var/lib/pacman/local/*/desc) so AUR and .deb packages have rich metadata
             local_db_dir = Path("/var/lib/pacman/local")
@@ -3584,10 +3784,10 @@ class PackageManager:
                     for desc_path in local_db_dir.glob("*/desc"):
                         try:
                             raw_txt = desc_path.read_text(encoding="utf-8", errors="replace")
-                            item = _parse_desc_text(raw_txt, "local", "pacman")
+                            item = _parse_desc_text(raw_txt, "local", "aur")
                             if item and item["name"] not in pkgs:
                                 packager = str(item.get("packager", ""))
-                                if "Aura Deb Bridge" in packager:
+                                if "ArkST Deb Bridge" in packager or "Aura Deb Bridge" in packager or "Ark Deb Bridge" in packager:
                                     item["source"] = "deb"
                                     item["repo"] = "deb-local"
                                 pkgs[item["name"]] = item
@@ -3604,7 +3804,7 @@ class PackageManager:
                 with open(CACHE_FILE, "wb") as f:
                     pickle.dump(pkgs, f)
             except Exception as e:
-                print(f"[Aura] Error saving cache: {e}", file=sys.stderr)
+                print(f"[ArkST] Error saving cache: {e}", file=sys.stderr)
 
     def search_pacman(self, query: str, limit: int = 150) -> List[Dict[str, Any]]:
         """High-performance tiered fuzzy search for pacman repository packages."""
@@ -3740,7 +3940,7 @@ class PackageManager:
 
         try:
             url = f"https://aur.archlinux.org/rpc/v5/search/{urllib.parse.quote(clean_q)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "Aura-PackageHub/3.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "ArkST-PackageHub/3.0"})
             with urllib.request.urlopen(req, timeout=4) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 for item in data.get("results", []):
@@ -3816,7 +4016,7 @@ class PackageManager:
                                     }))
                         i += 1
                 except Exception as e:
-                    print(f"[Aura] AUR helper ({aur_helper}) fallback error: {e}", file=sys.stderr)
+                    print(f"[ArkST] AUR helper ({aur_helper}) fallback error: {e}", file=sys.stderr)
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         final_results = [item for score, item in candidates[:limit]]
@@ -3891,8 +4091,10 @@ class PackageManager:
         return combined[:limit]
 
     def search(self, query: str, source: str = "all", limit: int = 100) -> List[Dict[str, Any]]:
-        """Unified search across pacman, AUR, Snap, and/or Docker with strict priority."""
-        if source == "snap":
+        """Unified search across pacman, AUR, Flathub, Snap, and/or Docker with strict priority."""
+        if source in ("flatpak", "flathub"):
+            return self.flatpak_mgr.search_flatpaks(query)[:limit]
+        elif source == "snap":
             return self.snap_mgr.search_snaps(query)[:limit]
         elif source in ("container", "docker"):
             return self.container_mgr.list_apps(query)[:limit]
@@ -3919,9 +4121,34 @@ class PackageManager:
         if hasattr(self, "deb_mgr") and self.deb_mgr and self.deb_mgr.is_deb_installed(clean):
             return "deb"
 
+        # 0.4. Check upgradable_list if package has an authoritative pending update source
+        if hasattr(self, "upgradable_list") and self.upgradable_list:
+            for u in self.upgradable_list:
+                if (u.get("name") or "").strip().lower() == clean and u.get("source"):
+                    return u["source"]
+
+        # 0.5. Check if package is an AppStream/Flatpak ID (e.g. com.spotify.Client)
+        if "." in raw_pkg and hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+            if self.flatpak_mgr.is_flatpak_app_installed(raw_pkg):
+                return "flatpak"
+            if any(a.get("id", "").lower() == clean for a in getattr(self.flatpak_mgr, "CURATED_FLATPAK_APPS", [])):
+                return "flatpak"
+
         # 1. Check official pacman sync DB & installed packages
-        if clean in self.packages or clean in self.installed_set:
+        if clean in self.packages:
+            p_meta = self.packages[clean]
+            if p_meta.get("source") == "deb" or p_meta.get("repo") == "deb-local":
+                return "deb"
+            if p_meta.get("source") == "aur" or p_meta.get("repo") in ("local", "aur"):
+                return "aur"
             return "pacman"
+        if clean in self.installed_set:
+            return "pacman"
+
+        # 1.5. Check installed Flatpak by name/ID
+        if hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+            if self.flatpak_mgr.is_flatpak_app_installed(raw_pkg):
+                return "flatpak"
 
         # 2. Check curated Snap or installed Snap
         if hasattr(self, "snap_mgr") and self.snap_mgr:
@@ -3955,13 +4182,18 @@ class PackageManager:
         return parse_pacman_info(raw_text)
 
     def get_package_info(self, name: str, source: str = "pacman") -> Dict[str, Any]:
-        """Fetch package information unified across pacman, AUR, Snap, and Container."""
+        """Fetch package information unified across pacman, AUR, Flathub, Snap, and Container."""
+        if source in ("flatpak", "flathub"):
+            return self.flatpak_mgr.get_flatpak_details(name)
         if source == "snap":
             return self.snap_mgr.get_snap_details(name)
         return self.get_package_detail(name, source=source)
 
     def get_package_detail(self, name: str, source: str = "pacman") -> Dict[str, Any]:
         """Fetch full details of a package with strict sanitization."""
+        if source in ("flatpak", "flathub") or str(name).lower().endswith(".flatpakref"):
+            if hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+                return self.flatpak_mgr.get_flatpak_details(name)
         if source == "deb" or str(name).lower().endswith(".deb"):
             if hasattr(self, "deb_mgr") and self.deb_mgr:
                 return self.deb_mgr.get_deb_detail(name)
@@ -3984,19 +4216,19 @@ class PackageManager:
                 "version": "latest",
                 "installed_version": "latest" if is_inst else "",
                 "desc": short_desc,
-                "extended_desc": f"{short_desc}\n\nRuns inside Aura's isolated 'aura-box' Alpine Linux container with Wayland/X11 socket passthrough, PipeWire audio, and automatic host desktop shortcut integration.",
+                "extended_desc": f"{short_desc}\n\nRuns inside ArkST's isolated 'arkst-box' Alpine Linux container with Wayland/X11 socket passthrough, PipeWire audio, and automatic host desktop shortcut integration.",
                 "source": "docker",
-                "repo": "aura-box (Alpine)",
+                "repo": "arkst-box (Alpine)",
                 "arch": "x86_64",
-                "packager": "Alpine Linux / Aura Box",
+                "packager": "Alpine Linux / ArkST Box",
                 "maintainer": "Alpine Linux Community",
                 "license": "Open Source",
                 "isize_str": pkg_size,
                 "csize_str": pkg_size,
-                "depends": ["docker", "aura-box (Alpine GUI Sandbox)"],
+                "depends": ["docker", "arkst-box (Alpine GUI Sandbox)"],
                 "icon": icon_val,
                 "is_installed": is_inst,
-                "desktop_entry": f"aura-box-{clean_id}" if is_inst else None,
+                "desktop_entry": f"arkst-box-{clean_id}" if is_inst else None,
                 "url": f"https://pkgs.alpinelinux.org/packages?name={clean_id}",
             }
         with self._lock:
@@ -4062,7 +4294,7 @@ class PackageManager:
         if source == "aur" or not info.get("desc"):
             try:
                 url = f"https://aur.archlinux.org/rpc/v5/info/{urllib.parse.quote(name)}"
-                req = urllib.request.Request(url, headers={"User-Agent": "Aura-PackageHub/3.0"})
+                req = urllib.request.Request(url, headers={"User-Agent": "ArkST-PackageHub/3.0"})
                 with urllib.request.urlopen(req, timeout=4) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     results = data.get("results", [])
@@ -4118,22 +4350,62 @@ class PackageManager:
 
     def detect_desktop_entry(self, pkg_name: str) -> Optional[str]:
         """Detect if an installed package provides a desktop application launcher (fast in-memory)."""
+        clean_raw = (pkg_name or "").strip()
+        if not clean_raw:
+            return None
+        name_lower = clean_raw.lower()
+
+        # 1. Docker Container App
         if hasattr(self, "container_mgr") and self.container_mgr:
             try:
-                if self.container_mgr.is_app_installed(pkg_name):
-                    return f"aura-box-{pkg_name.strip().lower()}"
+                if name_lower.startswith("arkst-box-"):
+                    aid = name_lower[len("arkst-box-"):]
+                    if self.container_mgr.is_app_installed(aid):
+                        return f"arkst-box-{aid}"
+                if self.container_mgr.is_app_installed(name_lower):
+                    return f"arkst-box-{name_lower}"
             except Exception:
                 pass
-        is_inst = self.is_installed(pkg_name)
-        if not is_inst and hasattr(self, "snap_mgr") and self.snap_mgr:
+
+        # 2. Installed Flatpak App
+        if hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
             try:
-                is_inst = self.snap_mgr.is_snap_installed(pkg_name)
+                if ("." in clean_raw or not self.is_installed(clean_raw)) and self.flatpak_mgr.is_flatpak_app_installed(clean_raw):
+                    return self.flatpak_mgr.resolve_flatpak_id(clean_raw)
             except Exception:
                 pass
+
+        # 3. Installed Snap App
+        snap_inst = False
+        if hasattr(self, "snap_mgr") and self.snap_mgr:
+            try:
+                snap_cand = name_lower.split("_")[0]
+                snap_inst = self.snap_mgr.is_snap_installed(snap_cand)
+                if snap_inst:
+                    snap_dt_dir = Path("/var/lib/snapd/desktop/applications")
+                    if snap_dt_dir.exists():
+                        matches = list(snap_dt_dir.glob(f"{snap_cand}_*.desktop"))
+                        if matches:
+                            return matches[0].stem
+                    if Path(f"/snap/bin/{snap_cand}").exists() or any(s.get("name") == snap_cand for s in self.snap_mgr.CURATED_SNAP_APPS):
+                        return f"{snap_cand}_{snap_cand}"
+            except Exception:
+                pass
+
+        # 4. Installed .deb Package Registry check
+        if hasattr(self, "deb_mgr") and self.deb_mgr:
+            try:
+                reg = self.deb_mgr._load_registry()
+                if name_lower in reg and reg[name_lower].get("desktop_entry"):
+                    return reg[name_lower]["desktop_entry"]
+            except Exception:
+                pass
+
+        is_inst = self.is_installed(clean_raw) or snap_inst
         if not is_inst:
             return None
+
         entries = get_desktop_entries_map()
-        name_lower = pkg_name.lower()
         if name_lower in _DESKTOP_OVERRIDES:
             ov = _DESKTOP_OVERRIDES[name_lower]
             if ov in entries or os.path.exists(f"/usr/share/applications/{ov}.desktop"):
@@ -4149,16 +4421,101 @@ class PackageManager:
         clean_nodash = clean.replace("-", "")
         if clean_nodash in entries:
             return entries[clean_nodash]
+        if snap_inst:
+            snap_cand = name_lower.split("_")[0]
+            snap_dt_dir = Path("/var/lib/snapd/desktop/applications")
+            if snap_dt_dir.exists():
+                matches = list(snap_dt_dir.glob(f"{snap_cand}_*.desktop"))
+                if matches:
+                    return matches[0].stem
+            if Path(f"/snap/bin/{snap_cand}").exists() or any(s.get("name") == snap_cand for s in self.snap_mgr.CURATED_SNAP_APPS):
+                return f"{snap_cand}_{snap_cand}"
         return None
 
     def launch_desktop_app(self, desktop_name: str) -> bool:
-        """Launch a desktop application using gtk-launch or gio."""
+        """Launch a desktop application across Pacman, AUR, .deb, Flatpak, Snap, and Docker sandboxes."""
+        if not desktop_name:
+            return False
+        raw = desktop_name.strip()
+        stem = raw[:-8] if raw.lower().endswith(".desktop") else raw
+        stem_low = stem.lower()
+
+        # 1. Docker Sandbox shortcut
+        if stem_low.startswith("arkst-box-") and hasattr(self, "container_mgr") and self.container_mgr:
+            app_id = stem[len("arkst-box-"):]
+            self.container_mgr.launch_app(app_id)
+            return True
+
+        # 2. Flatpak AppStream ID
+        if "." in stem and hasattr(self, "flatpak_mgr") and self.flatpak_mgr:
+            if self.flatpak_mgr.is_flatpak_app_installed(stem) and not Path(f"/usr/share/applications/{stem}.desktop").exists():
+                if self.flatpak_mgr.launch_flatpak(stem):
+                    return True
+
+        # 3. Snap desktop launcher (<snap>_<app>)
+        if "_" in stem and hasattr(self, "snap_mgr") and self.snap_mgr:
+            snap_name = stem_low.split("_")[0]
+            if self.snap_mgr.is_snap_installed(snap_name):
+                if self.snap_mgr.launch_snap(snap_name):
+                    return True
+
+        env = get_gui_launch_env()
+
+        # Locate exact .desktop file across all application directories
+        dt_path: Optional[Path] = None
+        for d in DESKTOP_SEARCH_DIRS:
+            if not d.exists():
+                continue
+            cand = d / f"{stem}.desktop"
+            if cand.exists():
+                dt_path = cand
+                break
+            for p in d.glob("*.desktop"):
+                if p.stem.lower() == stem_low:
+                    dt_path = p
+                    break
+            if dt_path:
+                break
+
+        # If .desktop file is in standard XDG dirs, try gtk-launch with full XDG_DATA_DIRS
+        if shutil.which("gtk-launch") and (dt_path is None or "snapd" not in str(dt_path)):
+            try:
+                target_arg = f"{dt_path.stem}.desktop" if dt_path else desktop_name
+                subprocess.Popen(["gtk-launch", target_arg], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                pass
+
+        # Try gio launch with the resolved full .desktop path
+        target_gio = str(dt_path) if dt_path else f"/usr/share/applications/{stem}.desktop"
+        if shutil.which("gio") and Path(target_gio).exists():
+            try:
+                subprocess.Popen(["gio", "launch", target_gio], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                pass
+
+        # Direct Exec= parser fallback (handles custom paths, /opt binaries, and non-XDG desktop files)
+        if dt_path and dt_path.exists():
+            try:
+                exec_line = ""
+                for line in dt_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if line.startswith("Exec="):
+                        exec_line = line[5:].strip()
+                        break
+                if exec_line:
+                    clean_cmd = re.sub(r'\s+%[fFuUdDnNickvm]', '', exec_line).strip()
+                    subprocess.Popen(["sh", "-c", clean_cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return True
+            except Exception:
+                pass
+
         try:
-            subprocess.Popen(["gtk-launch", desktop_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(["gtk-launch", desktop_name], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
         except Exception:
             try:
-                subprocess.Popen(["gio", "launch", f"/usr/share/applications/{desktop_name}.desktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["gio", "launch", f"/usr/share/applications/{desktop_name}.desktop"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
             except Exception:
                 return False
@@ -4283,6 +4640,21 @@ class PackageManager:
                     }
                     self._start_action_worker(action, pkg_name, source, progress_cb, complete_cb, start_cb)
                     return "started"
+                if src_norm in ("flatpak", "flathub") and active_src not in ("flatpak", "flathub") and getattr(self, "_active_flatpak_tx", None) is None:
+                    self._active_flatpak_tx = {
+                        "action": action,
+                        "pkg_name": pkg_name,
+                        "source": "flatpak",
+                        "progress": 0.06,
+                        "status": f"Preparing Flathub app {pkg_name}...",
+                        "status_msg": f"Preparing Flathub app {pkg_name}...",
+                        "start_time": time.time(),
+                        "current_pkg": target_norm,
+                        "packages": [pkg_name],
+                        "log_lines": [],
+                    }
+                    self._start_action_worker(action, pkg_name, source, progress_cb, complete_cb, start_cb)
+                    return "started"
                 if src_norm == "docker" and active_src != "docker" and getattr(self, "_active_docker_tx", None) is None:
                     self._active_docker_tx = {
                         "action": action,
@@ -4328,7 +4700,7 @@ class PackageManager:
             try:
                 start_cb()
             except Exception as e:
-                print(f"[Aura] Error in start_cb: {e}", file=sys.stderr)
+                print(f"[ArkST] Error in start_cb: {e}", file=sys.stderr)
 
         is_system_upgrade = pkg_name in ["system", "--all", "all", ""] or not pkg_name
         target_pkg = ("" if is_system_upgrade else (pkg_name or "")).strip().lower()
@@ -4368,20 +4740,126 @@ class PackageManager:
                     env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
                 env["LC_ALL"] = "C"
 
-                actual_source = source
+                actual_source = (source or "pacman").strip().lower()
+                if actual_source == "flathub":
+                    actual_source = "flatpak"
+                elif actual_source == "container":
+                    actual_source = "docker"
+
+                matched_update_entry = None
                 if action in ["update", "upgrade"] and not is_system_upgrade:
+                    resolved_cand = self.resolve_installed_pkg_name(pkg_name)
+                    cand_lows = {pkg_name.strip().lower(), f"{pkg_name.strip().lower()}-bin", resolved_cand.strip().lower()}
                     with self._lock:
-                        matched = next((u for u in self.upgradable_list if u.get("name") in (pkg_name, f"{pkg_name}-bin", self.resolve_installed_pkg_name(pkg_name))), None)
+                        matched = next(
+                            (
+                                u for u in self.upgradable_list
+                                if (u.get("name") or "").strip().lower() in cand_lows
+                                or (u.get("pkg_name") or "").strip().lower() in cand_lows
+                            ),
+                            None
+                        )
                         if matched:
+                            matched_update_entry = dict(matched)
                             if matched.get("source"):
-                                actual_source = matched["source"]
+                                actual_source = matched["source"].strip().lower()
+                                if actual_source == "flathub":
+                                    actual_source = "flatpak"
+                                elif actual_source == "container":
+                                    actual_source = "docker"
                             if matched.get("name") and matched["name"] != pkg_name:
                                 pkg_name = matched["name"]
                                 target_pkg = pkg_name.strip().lower()
                     if actual_source == "pacman":
-                        resolved_src = self.resolve_package_source(pkg_name)
+                        resolved_src = self.resolve_package_source(resolved_cand or pkg_name)
                         if resolved_src != "pacman":
                             actual_source = resolved_src
+
+                if actual_source in ("flatpak", "flathub"):
+                    def _fp_prog(frac_or_msg, maybe_msg=None):
+                        if isinstance(frac_or_msg, (int, float)):
+                            frac = float(frac_or_msg)
+                            msg = str(maybe_msg or "")
+                        else:
+                            msg = str(frac_or_msg)
+                            frac = 0.5
+                        if msg:
+                            with self._action_lock:
+                                if isinstance(self.active_transaction, dict):
+                                    logs_ref = self.active_transaction.setdefault("log_lines", [])
+                                    logs_ref.append(msg)
+                                    if len(logs_ref) > 250:
+                                        del logs_ref[:-200]
+                        _safe_progress(frac, msg)
+
+                    def _fp_done(ok: bool, *args):
+                        if len(args) >= 3:
+                            err = str(args[-1] or "")
+                        elif len(args) >= 1:
+                            err = "" if ok else str(args[-1] or "")
+                        else:
+                            err = "" if ok else "Flathub operation failed"
+
+                        was_parallel_fp = False
+                        with self._action_lock:
+                            if getattr(self, "_active_flatpak_tx", None) and (self._active_flatpak_tx.get("pkg_name") or "").strip().lower() == target_pkg:
+                                self._active_flatpak_tx = None
+                                was_parallel_fp = True
+                        if ok:
+                            fp_id = self.flatpak_mgr.resolve_flatpak_id(pkg_name)
+                            with self._lock:
+                                if action in ["upgrade", "update"]:
+                                    self.upgradable_list = [
+                                        u for u in self.upgradable_list
+                                        if (u.get("name") or "").lower() not in (pkg_name.lower(), fp_id.lower())
+                                    ]
+                                    try:
+                                        with open(UPDATES_CACHE_FILE, "w") as f:
+                                            json.dump(self.upgradable_list, f)
+                                    except Exception:
+                                        pass
+                            self.refresh_installed()
+                            comp_msg = f"✓ Completed {action} for {pkg_name} (Flathub)!"
+                            if not was_parallel_fp:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 1.0
+                                        self.active_transaction["status"] = comp_msg
+                                        self.active_transaction["status_msg"] = comp_msg
+                                        self.active_transaction["is_completed"] = True
+                                self._last_progress = 1.0
+                            progress_cb(1.0, comp_msg)
+                            try:
+                                complete_cb(True, action, pkg_name, "")
+                            finally:
+                                if not was_parallel_fp:
+                                    self._process_next_action()
+                        else:
+                            if not was_parallel_fp:
+                                with self._action_lock:
+                                    if self.active_transaction:
+                                        self.active_transaction["progress"] = 0.0
+                                        self.active_transaction["status"] = f"Failed: {err}"
+                                        self.active_transaction["status_msg"] = f"Failed: {err}"
+                                        self.active_transaction["is_completed"] = True
+                                    self.active_transaction = None
+                                    self._last_progress = 0.0
+                            progress_cb(0.0, f"Failed: {err}")
+                            try:
+                                complete_cb(False, action, pkg_name, err)
+                            finally:
+                                if not was_parallel_fp:
+                                    self._process_next_action()
+
+                    if action == "install":
+                        self.flatpak_mgr.install_flatpak(pkg_name, progress_cb=_fp_prog, complete_cb=_fp_done)
+                    elif action in ("remove", "clean_remove"):
+                        self.flatpak_mgr.remove_flatpak(pkg_name, delete_data=(action == "clean_remove"), progress_cb=_fp_prog, complete_cb=_fp_done)
+                    elif action in ("update", "upgrade"):
+                        self.flatpak_mgr.update_flatpak(pkg_name, progress_cb=_fp_prog, complete_cb=_fp_done)
+                    else:
+                        _fp_done(False, f"Unsupported Flatpak action: {action}")
+                    return
 
                 if actual_source == "snap":
                     def _snap_prog(frac_or_msg, maybe_msg=None):
@@ -4393,8 +4871,9 @@ class PackageManager:
                             frac = 0.5
                         if msg:
                             with self._action_lock:
-                                if isinstance(self.active_transaction, dict):
-                                    logs_ref = self.active_transaction.setdefault("log_lines", [])
+                                target_tx = self._active_snap_tx if getattr(self, "_active_snap_tx", None) is not None else self.active_transaction
+                                if isinstance(target_tx, dict):
+                                    logs_ref = target_tx.setdefault("log_lines", [])
                                     logs_ref.append(msg)
                                     if len(logs_ref) > 250:
                                         del logs_ref[:-200]
@@ -4414,6 +4893,9 @@ class PackageManager:
                                 self._active_snap_tx = None
                                 was_parallel_snap = True
                         if ok:
+                            if hasattr(self, "snap_mgr") and self.snap_mgr:
+                                self.snap_mgr.invalidate_cache()
+                            self.refresh_installed()
                             with self._lock:
                                 if action in ["upgrade", "update"]:
                                     self.upgradable_list = [u for u in self.upgradable_list if u.get("name") != pkg_name]
@@ -4456,8 +4938,8 @@ class PackageManager:
 
                     if action == "install":
                         self.snap_mgr.install_snap(pkg_name, progress_cb=_snap_prog, complete_cb=_snap_done)
-                    elif action == "remove":
-                        self.snap_mgr.remove_snap(pkg_name, progress_cb=_snap_prog, complete_cb=_snap_done)
+                    elif action in ("remove", "clean_remove"):
+                        self.snap_mgr.remove_snap(pkg_name, purge=(action == "clean_remove"), progress_cb=_snap_prog, complete_cb=_snap_done)
                     elif action in ["update", "upgrade"]:
                         self.snap_mgr.update_snap(pkg_name, progress_cb=_snap_prog, complete_cb=_snap_done)
                     else:
@@ -4466,6 +4948,13 @@ class PackageManager:
 
                 if actual_source == "docker":
                     def _docker_prog(msg: str):
+                        with self._action_lock:
+                            target_tx = self._active_docker_tx if getattr(self, "_active_docker_tx", None) is not None else self.active_transaction
+                            if isinstance(target_tx, dict):
+                                logs_ref = target_tx.setdefault("log_lines", [])
+                                logs_ref.append(str(msg))
+                                if len(logs_ref) > 250:
+                                    del logs_ref[:-200]
                         _safe_progress(0.5, str(msg))
 
                     def _docker_done(ok: bool, msg: str = ""):
@@ -4634,6 +5123,17 @@ class PackageManager:
                                 )
                             )
                             return
+                        if hasattr(self, "flatpak_mgr") and self.flatpak_mgr.is_flatpak_app_installed(pkg_name):
+                            self.flatpak_mgr.remove_flatpak(
+                                pkg_name,
+                                delete_data=is_clean_remove,
+                                progress_cb=lambda f, m=None: _safe_progress(float(f) if isinstance(f, (int, float)) else 0.5, str(m or f)),
+                                complete_cb=lambda ok, *a: (
+                                    complete_cb(ok, action, pkg_name, "" if ok else str(a[-1] if a else "Flatpak remove failed")),
+                                    self._process_next_action()
+                                )
+                            )
+                            return
                         if hasattr(self, "container_mgr") and self.container_mgr.is_app_installed(pkg_name):
                             self.container_mgr.uninstall_app(
                                 pkg_name,
@@ -4784,42 +5284,73 @@ class PackageManager:
                             parser.error_lines.clear()
                             rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-Rscn", "--noconfirm", target])
 
-                # Multi-stage Resilient Fallbacks for Installation
-                elif rc != 0 and eff_action == "install" and not is_system_upgrade:
-                    # 1. If sudo -n failed because passwordless wasn't active for this command, retry with sudo -A
-                    if is_pwless and ("a password is required" in combined_logs_lower or "authentication" in combined_logs_lower):
+                # If single-package update ran 'pacman -S <target>' against an unsynced /var/lib/pacman/sync DB
+                # and merely reinstalled the old version ('is up to date -- reinstalling'), sync DB and upgrade!
+                if rc == 0 and eff_action in ("update", "upgrade") and not is_system_upgrade and actual_source == "pacman":
+                    if "is up to date -- reinstalling" in combined_logs_lower:
+                        _safe_progress(0.22, f"Synchronizing repository database to fetch latest {pkg_name} update...")
+                        subprocess.run(sudo_prefix + ["pacman", "-Sy", "--noconfirm"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=120)
+                        parser.error_lines.clear()
+                        rc = _run_streamed_cmd(cmd)
+                        combined_logs_lower = "\n".join(tx_logs).lower()
+
+                # Multi-stage Resilient Fallbacks for Installation AND Updates (Single & System-Wide)
+                if rc != 0 and eff_action in ("install", "update", "upgrade"):
+                    # 1. If sudo -n or paru/yay failed because a password/terminal was required, retry with sudo -A / --sudoflags -A
+                    if (
+                        "a password is required" in combined_logs_lower
+                        or "a terminal is required" in combined_logs_lower
+                        or "authentication" in combined_logs_lower
+                        or "sudo:" in combined_logs_lower
+                    ):
                         sudo_prefix = ["sudo", "-A"]
                         aur_sudo_flags = ["--sudoflags", "-A"]
                         parser.error_lines.clear()
-                        cmd_retry = [ "sudo", "-A" ] + cmd[2:] if cmd[:2] == ["sudo", "-n"] else cmd
+                        if cmd[:2] == ["sudo", "-n"]:
+                            cmd_retry = ["sudo", "-A"] + cmd[2:]
+                        elif cmd and cmd[0] in ("paru", "yay") and "--sudoflags" not in cmd:
+                            cmd_retry = cmd[:2] + ["--sudoflags", "-A"] + cmd[2:]
+                        else:
+                            cmd_retry = cmd
                         rc = _run_streamed_cmd(cmd_retry)
                         combined_logs_lower = "\n".join(tx_logs).lower()
 
                     # 2. If conflict prompt rejected under --noconfirm ('are in conflict'), retry with --ask=4
                     if rc != 0 and ("are in conflict" in combined_logs_lower or "conflicting" in combined_logs_lower):
-                        _safe_progress(0.20, f"Resolving conflicting package replacement for {pkg_name}...")
+                        _safe_progress(0.20, f"Resolving conflicting package replacement for {pkg_name or 'system'}...")
                         parser.error_lines.clear()
-                        rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-S", "--needed", "--noconfirm", "--ask=4", pkg_name])
+                        if is_system_upgrade:
+                            rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-Syu", "--needed", "--noconfirm", "--ask=4"])
+                        else:
+                            target_c = self.resolve_installed_pkg_name(pkg_name) if eff_action in ("update", "upgrade") else pkg_name
+                            needed_fl = ["--needed"] if eff_action == "install" else []
+                            rc = _run_streamed_cmd(sudo_prefix + ["pacman", "-S"] + needed_fl + ["--noconfirm", "--ask=4", target_c])
                         combined_logs_lower = "\n".join(tx_logs).lower()
 
-                    # 3. If mirror 404 ('failed retrieving file' / '404'), refresh sync DB (-Sy) and retry
-                    if rc != 0 and ("failed retrieving file" in combined_logs_lower or "returned error: 404" in combined_logs_lower):
+                    # 3. If mirror 404 ('failed retrieving file' / '404') or stale sync DB during single update/install, refresh sync DB (-Sy) and retry
+                    if rc != 0 and not is_system_upgrade and (
+                        "failed retrieving file" in combined_logs_lower
+                        or "returned error: 404" in combined_logs_lower
+                        or "could not open file" in combined_logs_lower
+                    ):
                         _safe_progress(0.18, "Refreshing outdated Pacman mirror databases (pacman -Sy)...")
                         subprocess.run(sudo_prefix + ["pacman", "-Sy", "--noconfirm"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=120)
                         parser.error_lines.clear()
                         rc = _run_streamed_cmd(cmd)
                         combined_logs_lower = "\n".join(tx_logs).lower()
 
-                    # 4. If target not found in pacman repos, fallback to AUR (paru / yay / native makepkg)
-                    if rc != 0 and "target not found" in combined_logs_lower and actual_source == "pacman":
-                        _safe_progress(0.15, f"Searching AUR for {pkg_name}...")
+                    # 4. If target not found in pacman repos (e.g. AUR package mislabeled as pacman), fallback to AUR (paru / yay / native makepkg)
+                    if rc != 0 and not is_system_upgrade and "target not found" in combined_logs_lower and actual_source == "pacman":
+                        target_aur = self.resolve_installed_pkg_name(pkg_name) if eff_action in ("update", "upgrade") else pkg_name
+                        _safe_progress(0.15, f"Fetching {target_aur} from AUR...")
                         parser.error_lines.clear()
+                        needed_fl = ["--needed"] if eff_action == "install" else []
                         if aur_helper == "paru":
-                            rc = _run_streamed_cmd(["paru", "-S", "--needed", "--noconfirm", "--skipreview"] + aur_sudo_flags + [pkg_name])
+                            rc = _run_streamed_cmd(["paru", "-S"] + needed_fl + ["--noconfirm", "--skipreview", "--sudoflags", "-A", target_aur])
                         elif aur_helper == "yay":
-                            rc = _run_streamed_cmd(["yay", "-S", "--needed", "--noconfirm", "--nodiffmenu", "--noeditmenu"] + aur_sudo_flags + [pkg_name])
+                            rc = _run_streamed_cmd(["yay", "-S"] + needed_fl + ["--noconfirm", "--nodiffmenu", "--noeditmenu", "--sudoflags", "-A", target_aur])
                         else:
-                            ok_aur, err_aur = self._build_aur_native(pkg_name, env, is_pwless, _safe_progress)
+                            ok_aur, err_aur = self._build_aur_native(target_aur, env, is_pwless, _safe_progress)
                             rc = 0 if ok_aur else 1
                             if not ok_aur:
                                 parser.error_lines.append(err_aur)
@@ -4833,11 +5364,27 @@ class PackageManager:
                     _safe_progress(0.92, f"Cleaning residual app caches & configuration for {target}...")
                     self.purge_app_leftovers(target, original_name=pkg_name)
                 if success:
-                    # If system upgrade ('Update All'), also refresh any upgradable Snap or Docker container apps!
+                    # If system upgrade ('Update All'), also refresh any upgradable AUR (if no helper), Flatpak, Snap, or Docker apps!
                     if is_system_upgrade and action in ["upgrade", "update"]:
                         with self._lock:
+                            aur_up_pkgs = [u.get("name") for u in self.upgradable_list if u.get("source") == "aur" and u.get("name")]
+                            has_flatpak_up = any(u.get("source") in ("flatpak", "flathub") for u in self.upgradable_list)
                             has_snap_up = any(u.get("source") == "snap" for u in self.upgradable_list)
                             has_docker_up = any(u.get("source") in ("docker", "container") for u in self.upgradable_list)
+                        if aur_up_pkgs and not aur_helper:
+                            for aur_p in aur_up_pkgs:
+                                _safe_progress(0.89, f"Upgrading AUR package {aur_p} via makepkg...")
+                                try:
+                                    self._build_aur_native(aur_p, env, is_pwless, _safe_progress)
+                                except Exception:
+                                    pass
+                        if has_flatpak_up and hasattr(self, "flatpak_mgr") and self.flatpak_mgr.is_flatpak_installed():
+                            _safe_progress(0.90, "Updating Flathub applications...")
+                            try:
+                                subprocess.run(["flatpak", "update", "-y", "--noninteractive"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=300)
+                                subprocess.run(["flatpak", "update", "--user", "-y", "--noninteractive"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=300)
+                            except Exception:
+                                pass
                         if has_snap_up and hasattr(self, "snap_mgr") and self.snap_mgr.is_snapd_installed():
                             _safe_progress(0.91, "Refreshing Snap packages...")
                             try:
@@ -4990,7 +5537,7 @@ class PackageManager:
         "hypr", "waybar", "rofi", "wofi", "fuzzel", "swaync", "mako", "dunst", "swww",
         "gtk-2.0", "gtk-3.0", "gtk-4.0", "qt5ct", "qt6ct", "Kvantum", "dconf", "systemd",
         "pulse", "pipewire", "wireplumber", "fontconfig", "ibus", "fcitx5", "mime",
-        "applications", "icons", "fonts", "themes", "keyrings", "gnupg", "ssh", "aura",
+        "applications", "icons", "fonts", "themes", "keyrings", "gnupg", "ssh", "arkst",
         "fish", "zsh", "bash", "nvim", "neovim", "git", "alacritty", "kitty", "foot",
         "user-dirs.dirs", "user-dirs.locale", "autostart",
     }
@@ -5059,7 +5606,7 @@ class PackageManager:
         if user_apps_dir.exists():
             for cand in candidates:
                 for dt in user_apps_dir.glob(f"*{cand.lower()}*.desktop"):
-                    if dt.name == "io.github.aura.desktop":
+                    if dt.name in ("io.github.arkst.desktop", "io.github.aura.desktop"):
                         continue
                     try:
                         dt.unlink()
@@ -5080,7 +5627,7 @@ class PackageManager:
         if cls.is_passwordless_configured():
             return True
         try:
-            token_path = Path(f"/run/user/{os.getuid()}/.aura_session_pass")
+            token_path = Path(f"/run/user/{os.getuid()}/.arkst_session_pass")
             if token_path.exists() and token_path.stat().st_size > 0:
                 return True
         except Exception:
@@ -5116,7 +5663,7 @@ class PackageManager:
                 return False, "Incorrect administrator password. Please try again."
             token_dir = Path(f"/run/user/{os.getuid()}")
             if token_dir.exists():
-                token_path = token_dir / ".aura_session_pass"
+                token_path = token_dir / ".arkst_session_pass"
                 token_path.write_text(password + "\n", encoding="utf-8")
                 token_path.chmod(0o600)
             return True, "Session authenticated."
@@ -5133,7 +5680,7 @@ class PackageManager:
         """Fallback native AUR builder using git clone + makepkg when neither paru nor yay is installed."""
         if not shutil.which("git") or not shutil.which("makepkg"):
             return False, "Neither an AUR helper (paru/yay) nor git/makepkg is installed."
-        tmp_dir = tempfile.mkdtemp(prefix=f"aura-aur-{pkg_name}-")
+        tmp_dir = tempfile.mkdtemp(prefix=f"arkst-aur-{pkg_name}-")
         try:
             progress_fn(0.15, f"Cloning {pkg_name} from AUR...")
             clone_url = f"https://aur.archlinux.org/{pkg_name}.git"
@@ -5182,7 +5729,7 @@ class PackageManager:
 
     @staticmethod
     def get_vault_path() -> Path:
-        return Path.home() / ".local" / "share" / "aura" / ".aura_vault"
+        return Path.home() / ".local" / "share" / "arkst" / ".arkst_vault"
 
     @classmethod
     def is_passwordless_configured(cls) -> bool:
@@ -5226,11 +5773,11 @@ class PackageManager:
 
         # 2. Prepare temporary sudoers file with narrow pacman-only alias
         user = os.environ.get("USER") or "wheel"
-        sudoers_content = f"Cmnd_Alias AURA_PACMAN = /usr/bin/pacman, /usr/bin/snap, /usr/bin/systemctl, /usr/bin/paccache, /usr/bin/journalctl, /usr/bin/pacman-key, /usr/bin/ln, /usr/bin/mkdir\n{user} ALL=(root) NOPASSWD: AURA_PACMAN\n"
+        sudoers_content = f"Cmnd_Alias ARKST_PACMAN = /usr/bin/pacman, /usr/bin/flatpak, /usr/bin/snap, /usr/bin/systemctl, /usr/bin/paccache, /usr/bin/journalctl, /usr/bin/pacman-key, /usr/bin/ln, /usr/bin/mkdir, /usr/bin/rm, /usr/bin/cp, /usr/bin/true\n{user} ALL=(root) NOPASSWD: ARKST_PACMAN\n"
 
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile("w", delete=False, prefix="99-aura-pacman-") as tf:
+            with tempfile.NamedTemporaryFile("w", delete=False, prefix="99-arkst-pacman-") as tf:
                 tf.write(sudoers_content)
                 tmp_path = tf.name
 
@@ -5240,7 +5787,7 @@ class PackageManager:
                 return False, f"Sudoers syntax validation failed: {vproc.stderr or vproc.stdout}"
 
             # 4. Install atomically with root:root 0440 permissions
-            inst_cmd = ["sudo", "-S", "install", "-o", "root", "-g", "root", "-m", "0440", tmp_path, "/etc/sudoers.d/99-aura-pacman"]
+            inst_cmd = ["sudo", "-S", "install", "-o", "root", "-g", "root", "-m", "0440", tmp_path, "/etc/sudoers.d/99-arkst-pacman"]
             iproc = subprocess.run(
                 inst_cmd,
                 input=f"{password}\n",
@@ -5255,7 +5802,7 @@ class PackageManager:
             test_proc = subprocess.run(["sudo", "-n", "pacman", "-V"], capture_output=True, text=True, timeout=5)
             if test_proc.returncode != 0:
                 # Rollback if verification failed
-                subprocess.run(["sudo", "-S", "rm", "-f", "/etc/sudoers.d/99-aura-pacman"], input=f"{password}\n", text=True, capture_output=True, timeout=5)
+                subprocess.run(["sudo", "-S", "rm", "-f", "/etc/sudoers.d/99-arkst-pacman", "/etc/sudoers.d/99-aura-pacman"], input=f"{password}\n", text=True, capture_output=True, timeout=5)
                 return False, "Installed sudoers rule could not be verified by sudo."
 
             # 6. Purge any legacy plaintext credentials or session token files
@@ -5283,17 +5830,18 @@ class PackageManager:
         and immediately run 'sudo -k' so cached sudo timestamps do not keep sudo -n active.
         """
         try:
-            rule_path = Path("/etc/sudoers.d/99-aura-pacman")
-            all_rules = ["/etc/sudoers.d/99-aura-pacman", "/etc/sudoers.d/aura-pacman"]
+            rule_path = Path("/etc/sudoers.d/99-arkst-pacman")
+            legacy_rule_path = Path("/etc/sudoers.d/99-aura-pacman")
+            all_rules = ["/etc/sudoers.d/99-arkst-pacman", "/etc/sudoers.d/99-aura-pacman", "/etc/sudoers.d/aura-pacman"]
 
-            if not rule_path.exists():
+            if not rule_path.exists() and not legacy_rule_path.exists():
                 cls.get_vault_path().unlink(missing_ok=True)
                 cls.clear_auth_cache()
                 return True, "Passwordless mode is already disabled."
 
             # 1. First attempt sudo -n rm (works if user has active sudo timestamp or general NOPASSWD)
             proc = subprocess.run(
-                ["sudo", "-n", "rm", "-f", "/etc/sudoers.d/99-aura-pacman"],
+                ["sudo", "-n", "rm", "-f", "/etc/sudoers.d/99-arkst-pacman", "/etc/sudoers.d/99-aura-pacman"],
                 capture_output=True, text=True, timeout=5
             )
 
@@ -5302,7 +5850,7 @@ class PackageManager:
                 eff_pass = password
                 if not eff_pass:
                     try:
-                        token_path = Path(f"/run/user/{os.getuid()}/.aura_session_pass")
+                        token_path = Path(f"/run/user/{os.getuid()}/.arkst_session_pass")
                         if token_path.exists():
                             eff_pass = token_path.read_text(encoding="utf-8").strip()
                     except Exception:
@@ -5344,17 +5892,1121 @@ class PackageManager:
     @staticmethod
     def clear_auth_cache():
         """Clear cached session tokens and legacy vaults."""
-        for tname in ("aura_auth.token", ".aura_session_pass"):
+        for tname in ("arkst_auth.token", ".arkst_session_pass", "aura_auth.token", ".aura_session_pass"):
             try:
                 token = Path(f"/run/user/{os.getuid()}/{tname}")
                 token.unlink(missing_ok=True)
             except Exception:
                 pass
+        for vpath in (
+            Path.home() / ".local" / "share" / "arkst" / ".arkst_vault",
+            Path.home() / ".local" / "share" / "aura" / ".aura_vault",
+        ):
+            try:
+                vpath.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+
+class FlatpakManager:
+    """
+    First-class Flathub & Flatpak Integration Engine for Ark Store:
+    - Curated Flathub catalog with verified AppStream IDs and rich metadata
+    - Real-time Flathub API v2 search + local 'flatpak search' CLI integration
+    - 1-Click automated Flatpak & Flathub remote setup (user & system remotes)
+    - Live progress streaming for install, update, and uninstall operations
+    - Update checking ('flatpak remote-ls --updates') integrated into unified Updates view
+    """
+
+    FLATHUB_REMOTE_URL = "https://dl.flathub.org/repo/flathub.flatpakrepo"
+
+    CURATED_FLATPAK_APPS: List[Dict[str, Any]] = [
+        {
+            "id": "io.github.zen_browser.zen",
+            "name": "io.github.zen_browser.zen",
+            "short_name": "zen-browser",
+            "title": "Zen Browser",
+            "summary": "Experience tranquillity while browsing the web",
+            "description": "Privacy-focused, beautifully designed Firefox-based browser with vertical tabs, workspaces, and split views.",
+            "publisher": "Zen Team",
+            "developer": "Zen Team",
+            "version": "1.7.6b",
+            "category": "Productivity",
+            "icon": "zen-browser",
+            "store-url": "https://flathub.org/apps/io.github.zen_browser.zen",
+            "store_url": "https://flathub.org/apps/io.github.zen_browser.zen",
+        },
+        {
+            "id": "com.spotify.Client",
+            "name": "com.spotify.Client",
+            "short_name": "spotify",
+            "title": "Spotify",
+            "summary": "Online music streaming service",
+            "description": "Access all of your favorite music, podcasts, and playlists on Linux from the official Flathub package.",
+            "publisher": "Spotify",
+            "developer": "Spotify",
+            "version": "1.2.53",
+            "category": "Audio & Music",
+            "icon": "spotify",
+            "store-url": "https://flathub.org/apps/com.spotify.Client",
+            "store_url": "https://flathub.org/apps/com.spotify.Client",
+        },
+        {
+            "id": "com.discordapp.Discord",
+            "name": "com.discordapp.Discord",
+            "short_name": "discord",
+            "title": "Discord",
+            "summary": "Messaging, voice, and video client",
+            "description": "All-in-one voice, video, and text chat for communities, gaming, and friends in a sandboxed Flatpak.",
+            "publisher": "Discord Inc.",
+            "developer": "Discord Inc.",
+            "version": "0.0.84",
+            "category": "Communication",
+            "icon": "discord",
+            "store-url": "https://flathub.org/apps/com.discordapp.Discord",
+            "store_url": "https://flathub.org/apps/com.discordapp.Discord",
+        },
+        {
+            "id": "com.valvesoftware.Steam",
+            "name": "com.valvesoftware.Steam",
+            "short_name": "steam",
+            "title": "Steam",
+            "summary": "Launcher for the Steam software distribution service",
+            "description": "Play thousands of native Linux and Proton-powered Windows games in a self-contained Flathub runtime.",
+            "publisher": "Valve Corporation",
+            "developer": "Valve Corporation",
+            "version": "1.0.0.81",
+            "category": "Gaming",
+            "icon": "steam",
+            "store-url": "https://flathub.org/apps/com.valvesoftware.Steam",
+            "store_url": "https://flathub.org/apps/com.valvesoftware.Steam",
+        },
+        {
+            "id": "com.obsproject.Studio",
+            "name": "com.obsproject.Studio",
+            "short_name": "obs-studio",
+            "title": "OBS Studio",
+            "summary": "Live streaming and video recording software",
+            "description": "Free and open-source software for video recording and live streaming with PipeWire Wayland screen capture.",
+            "publisher": "OBS Project",
+            "developer": "OBS Project",
+            "version": "31.0.1",
+            "category": "Audio & Video",
+            "icon": "obs",
+            "store-url": "https://flathub.org/apps/com.obsproject.Studio",
+            "store_url": "https://flathub.org/apps/com.obsproject.Studio",
+        },
+        {
+            "id": "org.blender.Blender",
+            "name": "org.blender.Blender",
+            "short_name": "blender",
+            "title": "Blender",
+            "summary": "Free and open source 3D creation suite",
+            "description": "Complete 3D pipeline — modeling, rigging, animation, simulation, rendering, compositing, and motion tracking.",
+            "publisher": "Blender Foundation",
+            "developer": "Blender Foundation",
+            "version": "4.3.2",
+            "category": "Graphics & 3D",
+            "icon": "blender",
+            "store-url": "https://flathub.org/apps/org.blender.Blender",
+            "store_url": "https://flathub.org/apps/org.blender.Blender",
+        },
+        {
+            "id": "md.obsidian.Obsidian",
+            "name": "md.obsidian.Obsidian",
+            "short_name": "obsidian",
+            "title": "Obsidian",
+            "summary": "Markdown-based knowledge base",
+            "description": "Powerful and extensible knowledge base that works on top of your local folder of plain text Markdown files.",
+            "publisher": "Obsidian",
+            "developer": "Obsidian",
+            "version": "1.7.7",
+            "category": "Productivity",
+            "icon": "obsidian",
+            "store-url": "https://flathub.org/apps/md.obsidian.Obsidian",
+            "store_url": "https://flathub.org/apps/md.obsidian.Obsidian",
+        },
+        {
+            "id": "com.usebottles.bottles",
+            "name": "com.usebottles.bottles",
+            "short_name": "bottles",
+            "title": "Bottles",
+            "summary": "Run Windows software and games on Linux",
+            "description": "Easily manage Wine and Proton prefixes in isolated sandboxed environments with dependency installers.",
+            "publisher": "Mirko Brombin",
+            "developer": "Mirko Brombin",
+            "version": "51.18",
+            "category": "Gaming & Wine",
+            "icon": "com.usebottles.bottles",
+            "store-url": "https://flathub.org/apps/com.usebottles.bottles",
+            "store_url": "https://flathub.org/apps/com.usebottles.bottles",
+        },
+        {
+            "id": "com.heroicgameslauncher.hgl",
+            "name": "com.heroicgameslauncher.hgl",
+            "short_name": "heroic",
+            "title": "Heroic Games Launcher",
+            "summary": "Open source game launcher for Epic, GOG, and Amazon",
+            "description": "Play your Epic Games, GOG, and Amazon Prime Gaming library on Linux with Wine/Proton management.",
+            "publisher": "Heroic Games",
+            "developer": "Heroic Games",
+            "version": "2.15.2",
+            "category": "Gaming",
+            "icon": "com.heroicgameslauncher.hgl",
+            "store-url": "https://flathub.org/apps/com.heroicgameslauncher.hgl",
+            "store_url": "https://flathub.org/apps/com.heroicgameslauncher.hgl",
+        },
+        {
+            "id": "com.github.tchx84.Flatseal",
+            "name": "com.github.tchx84.Flatseal",
+            "short_name": "flatseal",
+            "title": "Flatseal",
+            "summary": "Manage Flatpak permissions",
+            "description": "Graphical utility to review and modify permissions from your Flatpak applications in one click.",
+            "publisher": "Martin Abente Lahaye",
+            "developer": "Martin Abente Lahaye",
+            "version": "2.3.0",
+            "category": "System Utilities",
+            "icon": "security-high",
+            "store-url": "https://flathub.org/apps/com.github.tchx84.Flatseal",
+            "store_url": "https://flathub.org/apps/com.github.tchx84.Flatseal",
+        },
+        {
+            "id": "io.missioncenter.MissionCenter",
+            "name": "io.missioncenter.MissionCenter",
+            "short_name": "missioncenter",
+            "title": "Mission Center",
+            "summary": "Monitor your CPU, Memory, Disk, Network and GPU usage",
+            "description": "Sleek GTK4/Libadwaita system performance and hardware telemetry monitor for modern Linux desktops.",
+            "publisher": "Mission Center Developers",
+            "developer": "Mission Center Developers",
+            "version": "0.6.2",
+            "category": "System Utilities",
+            "icon": "utilities-system-monitor",
+            "store-url": "https://flathub.org/apps/io.missioncenter.MissionCenter",
+            "store_url": "https://flathub.org/apps/io.missioncenter.MissionCenter",
+        },
+        {
+            "id": "com.mattjakeman.ExtensionManager",
+            "name": "com.mattjakeman.ExtensionManager",
+            "short_name": "extension-manager",
+            "title": "Extension Manager",
+            "summary": "Browse, install, and manage GNOME Shell Extensions",
+            "description": "Native desktop utility for searching and managing desktop extensions and configurations.",
+            "publisher": "Matthew Jakeman",
+            "developer": "Matthew Jakeman",
+            "version": "0.5.1",
+            "category": "Utilities",
+            "icon": "preferences-system",
+            "store-url": "https://flathub.org/apps/com.mattjakeman.ExtensionManager",
+            "store_url": "https://flathub.org/apps/com.mattjakeman.ExtensionManager",
+        },
+        {
+            "id": "org.localsend.localsend_app",
+            "name": "org.localsend.localsend_app",
+            "short_name": "localsend",
+            "title": "LocalSend",
+            "summary": "Share files to nearby devices over local network",
+            "description": "Free, open-source cross-platform AirDrop alternative that allows you to share files with nearby devices.",
+            "publisher": "Tien Do Nam",
+            "developer": "Tien Do Nam",
+            "version": "1.16.1",
+            "category": "Network & Sharing",
+            "icon": "localsend",
+            "store-url": "https://flathub.org/apps/org.localsend.localsend_app",
+            "store_url": "https://flathub.org/apps/org.localsend.localsend_app",
+        },
+        {
+            "id": "dev.zed.Zed",
+            "name": "dev.zed.Zed",
+            "short_name": "zed",
+            "title": "Zed",
+            "summary": "High-performance, multiplayer code editor",
+            "description": "Next-generation code editor engineered in Rust for speed, AI assistance, and collaborative coding.",
+            "publisher": "Zed Industries",
+            "developer": "Zed Industries",
+            "version": "0.172.8",
+            "category": "Development",
+            "icon": "dev.zed.Zed",
+            "store-url": "https://flathub.org/apps/dev.zed.Zed",
+            "store_url": "https://flathub.org/apps/dev.zed.Zed",
+        },
+        {
+            "id": "com.visualstudio.code",
+            "name": "com.visualstudio.code",
+            "short_name": "code",
+            "title": "Visual Studio Code",
+            "summary": "Code editing. Redefined.",
+            "description": "Visual Studio Code combines the simplicity of a source code editor with powerful developer tooling.",
+            "publisher": "Microsoft",
+            "developer": "Microsoft",
+            "version": "1.97.0",
+            "category": "Development",
+            "icon": "com.visualstudio.code.oss",
+            "store-url": "https://flathub.org/apps/com.visualstudio.code",
+            "store_url": "https://flathub.org/apps/com.visualstudio.code",
+        },
+        {
+            "id": "org.kde.kdenlive",
+            "name": "org.kde.kdenlive",
+            "short_name": "kdenlive",
+            "title": "Kdenlive",
+            "summary": "Non-linear video editor",
+            "description": "Professional open-source video editing software with multi-track timeline, effects, and color grading.",
+            "publisher": "KDE",
+            "developer": "KDE",
+            "version": "24.12.1",
+            "category": "Audio & Video",
+            "icon": "kdenlive",
+            "store-url": "https://flathub.org/apps/org.kde.kdenlive",
+            "store_url": "https://flathub.org/apps/org.kde.kdenlive",
+        },
+        {
+            "id": "org.gimp.GIMP",
+            "name": "org.gimp.GIMP",
+            "short_name": "gimp",
+            "title": "GIMP",
+            "summary": "Create images and edit photographs",
+            "description": "GNU Image Manipulation Program for photo retouching, image composition, and digital illustration.",
+            "publisher": "The GIMP Team",
+            "developer": "The GIMP Team",
+            "version": "2.10.38",
+            "category": "Graphics",
+            "icon": "gimp",
+            "store-url": "https://flathub.org/apps/org.gimp.GIMP",
+            "store_url": "https://flathub.org/apps/org.gimp.GIMP",
+        },
+        {
+            "id": "org.videolan.VLC",
+            "name": "org.videolan.VLC",
+            "short_name": "vlc",
+            "title": "VLC",
+            "summary": "VLC media player, the open-source multimedia player",
+            "description": "Universal multimedia player playing all audio and video formats, DVDs, and streaming protocols.",
+            "publisher": "VideoLAN",
+            "developer": "VideoLAN",
+            "version": "3.0.21",
+            "category": "Audio & Video",
+            "icon": "vlc",
+            "store-url": "https://flathub.org/apps/org.videolan.VLC",
+            "store_url": "https://flathub.org/apps/org.videolan.VLC",
+        },
+        {
+            "id": "com.bitwarden.desktop",
+            "name": "com.bitwarden.desktop",
+            "short_name": "bitwarden",
+            "title": "Bitwarden",
+            "summary": "A secure and free password manager for all of your devices",
+            "description": "Open-source password vault storing sensitive credentials with end-to-end zero-knowledge encryption.",
+            "publisher": "Bitwarden Inc.",
+            "developer": "Bitwarden Inc.",
+            "version": "2025.1.0",
+            "category": "Security & Privacy",
+            "icon": "bitwarden",
+            "store-url": "https://flathub.org/apps/com.bitwarden.desktop",
+            "store_url": "https://flathub.org/apps/com.bitwarden.desktop",
+        },
+        {
+            "id": "org.signal.Signal",
+            "name": "org.signal.Signal",
+            "short_name": "signal-desktop",
+            "title": "Signal Desktop",
+            "summary": "Private messenger for desktop",
+            "description": "Fast, simple, and secure end-to-end encrypted messaging, voice, and video calling.",
+            "publisher": "Signal Messenger",
+            "developer": "Signal Messenger",
+            "version": "7.40.0",
+            "category": "Communication",
+            "icon": "signal-desktop",
+            "store-url": "https://flathub.org/apps/org.signal.Signal",
+            "store_url": "https://flathub.org/apps/org.signal.Signal",
+        },
+        {
+            "id": "org.telegram.desktop",
+            "name": "org.telegram.desktop",
+            "short_name": "telegram-desktop",
+            "title": "Telegram Desktop",
+            "summary": "Official desktop client for the Telegram messenger",
+            "description": "Fast, secure cloud-based instant messaging synced seamlessly across all your devices.",
+            "publisher": "Telegram FZ-LLC",
+            "developer": "Telegram FZ-LLC",
+            "version": "5.10.7",
+            "category": "Communication",
+            "icon": "telegram",
+            "store-url": "https://flathub.org/apps/org.telegram.desktop",
+            "store_url": "https://flathub.org/apps/org.telegram.desktop",
+        },
+    ]
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._fp_op_lock = threading.RLock()
+        self.active_flatpak_ops: Dict[str, Tuple[float, str]] = {}
+        self._search_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self.is_setting_up: bool = False
+        self.setup_progress_text: str = ""
+        self.setup_progress_fraction: float = 0.0
+        self._status_cache: Optional[Dict[str, Any]] = None
+        self._status_cache_time: float = 0.0
+        self._installed_fp_cache: Optional[List[Dict[str, Any]]] = None
+        self._installed_fp_cache_time: float = 0.0
+        self._installed_fp_ids: Set[str] = set()
+        self._installed_fp_short_names: Dict[str, str] = {}
+
+    def invalidate_cache(self):
+        with self._lock:
+            self._installed_fp_cache = None
+            self._installed_fp_cache_time = 0.0
+            self._installed_fp_ids = set()
+            self._installed_fp_short_names = {}
+            self._status_cache = None
+            self._status_cache_time = 0.0
+        invalidate_desktop_caches()
+
+    def is_flatpak_available(self) -> bool:
+        return self.is_flatpak_installed()
+
+    def is_flatpak_installed(self) -> bool:
+        return shutil.which("flatpak") is not None or Path("/usr/bin/flatpak").exists()
+
+    def is_flathub_configured(self) -> bool:
+        if not self.is_flatpak_installed():
+            return False
+        for repo_cfg in (
+            Path("/var/lib/flatpak/repo/config"),
+            Path.home() / ".local" / "share" / "flatpak" / "repo" / "config",
+        ):
+            try:
+                if repo_cfg.exists() and "flathub" in repo_cfg.read_text(errors="ignore").lower():
+                    return True
+            except Exception:
+                pass
         try:
-            vault = Path.home() / ".local" / "share" / "aura" / ".aura_vault"
-            vault.unlink(missing_ok=True)
+            proc = subprocess.run(["flatpak", "remotes", "--columns=name"], capture_output=True, text=True, timeout=3)
+            if proc.returncode == 0 and "flathub" in proc.stdout.lower():
+                return True
         except Exception:
             pass
+        return False
+
+    def get_status(self, force_refresh: bool = False) -> Dict[str, Any]:
+        now = time.time()
+        if not force_refresh and self._status_cache and (now - self._status_cache_time < 10.0):
+            res = dict(self._status_cache)
+            res["is_setting_up"] = self.is_setting_up
+            return res
+
+        has_fp = self.is_flatpak_installed()
+        flathub_ok = self.is_flathub_configured() if has_fp else False
+
+        if has_fp and flathub_ok:
+            status_code = "ready"
+            status_text = "Flathub repository connected and ready"
+        elif has_fp and not flathub_ok:
+            status_code = "remote_missing"
+            status_text = "Flatpak installed, but Flathub remote is not connected yet"
+        else:
+            status_code = "missing"
+            status_text = "Flatpak runtime is not installed on this system"
+
+        res = {
+            "has_flatpak": has_fp,
+            "flathub_enabled": flathub_ok,
+            "status_code": status_code,
+            "status_text": status_text,
+            "is_setting_up": self.is_setting_up,
+        }
+        self._status_cache = res
+        self._status_cache_time = now
+        return res
+
+    def resolve_flatpak_id(self, name_or_id: str) -> str:
+        raw = (name_or_id or "").strip()
+        if not raw:
+            return ""
+        low = raw.lower()
+        for app in self.CURATED_FLATPAK_APPS:
+            if app["id"].lower() == low or app.get("short_name", "").lower() == low or app.get("title", "").lower() == low:
+                return app["id"]
+        if self._installed_fp_cache is None:
+            try:
+                self.get_installed_flatpaks()
+            except Exception:
+                pass
+        if low in self._installed_fp_short_names:
+            return self._installed_fp_short_names[low]
+        for item in (self._installed_fp_cache or []):
+            if item.get("id", "").lower() == low:
+                return item["id"]
+        for base_dir in (
+            Path("/var/lib/flatpak/app"),
+            Path.home() / ".local" / "share" / "flatpak" / "app",
+        ):
+            try:
+                if base_dir.exists():
+                    for child in base_dir.iterdir():
+                        if child.name.lower() == low or child.name.split(".")[-1].lower() == low:
+                            return child.name
+            except Exception:
+                pass
+        return raw
+
+    def setup_flatpak(self, progress_callback=None, completion_callback=None):
+        """1-Click automated setup: install flatpak if missing and enable official Flathub remote."""
+        with self._lock:
+            if self.is_setting_up:
+                if completion_callback:
+                    completion_callback(False, "Flathub setup is already in progress.")
+                return
+            self.is_setting_up = True
+            self.setup_progress_text = "Starting Flathub setup..."
+            self.setup_progress_fraction = 0.08
+
+        def _report(frac: float, msg: str):
+            self.setup_progress_fraction = frac
+            self.setup_progress_text = msg
+            if progress_callback:
+                progress_callback(frac, msg)
+
+        def _task():
+            try:
+                env = os.environ.copy()
+                if ASKPASS_SCRIPT.exists():
+                    env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
+                env["LC_ALL"] = "C"
+
+                if not self.is_flatpak_installed():
+                    _report(0.25, "Installing Flatpak runtime from official Arch repositories...")
+                    sudo_prefix = ["sudo", "-n"] if PackageManager.is_passwordless_configured() else ["sudo", "-A"]
+                    with GLOBAL_ALPM_LOCK:
+                        wait_for_alpm_lock(progress_cb=_report, max_wait=120, env=env)
+                        r = subprocess.run(sudo_prefix + ["pacman", "-S", "--needed", "--noconfirm", "flatpak"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=180)
+                        if r.returncode != 0 and sudo_prefix == ["sudo", "-n"]:
+                            r = subprocess.run(["sudo", "-A", "pacman", "-S", "--needed", "--noconfirm", "flatpak"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=180)
+                        if r.returncode != 0:
+                            err = (r.stderr or r.stdout or "Failed installing flatpak").strip().splitlines()[-1]
+                            if completion_callback:
+                                completion_callback(False, f"Failed to install flatpak: {err}")
+                            return
+
+                _report(0.65, "Connecting official Flathub repository (dl.flathub.org)...")
+                # Add user-level Flathub remote first (works without root privileges!)
+                subprocess.run(
+                    ["flatpak", "remote-add", "--user", "--if-not-exists", "flathub", self.FLATHUB_REMOTE_URL],
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=45
+                )
+                # Also attempt system-wide Flathub remote
+                r_sys = subprocess.run(
+                    ["flatpak", "remote-add", "--if-not-exists", "flathub", self.FLATHUB_REMOTE_URL],
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=45
+                )
+                if r_sys.returncode != 0:
+                    sudo_prefix = ["sudo", "-n"] if PackageManager.is_passwordless_configured() else ["sudo", "-A"]
+                    subprocess.run(
+                        sudo_prefix + ["flatpak", "remote-add", "--if-not-exists", "flathub", self.FLATHUB_REMOTE_URL],
+                        stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=45
+                    )
+
+                self.invalidate_cache()
+                st = self.get_status(force_refresh=True)
+                if st["flathub_enabled"]:
+                    _report(1.0, "Flathub repository connected and ready!")
+                    if completion_callback:
+                        completion_callback(True, "Flathub is now connected and ready to install apps!")
+                else:
+                    _report(1.0, "Flatpak installed; Flathub remote added.")
+                    if completion_callback:
+                        completion_callback(True, "Flatpak & Flathub configured.")
+            except Exception as e:
+                if completion_callback:
+                    completion_callback(False, f"Error configuring Flathub: {e}")
+            finally:
+                with self._lock:
+                    self.is_setting_up = False
+                    self.invalidate_cache()
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def get_installed_flatpaks(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        now = time.time()
+        if not force_refresh and self._installed_fp_cache is not None and (now - self._installed_fp_cache_time < 10.0):
+            return list(self._installed_fp_cache)
+
+        if not self.is_flatpak_installed():
+            self._installed_fp_cache = []
+            self._installed_fp_cache_time = now
+            self._installed_fp_ids = set()
+            self._installed_fp_short_names = {}
+            return []
+
+        try:
+            res = subprocess.run(
+                ["flatpak", "list", "--app", "--columns=application,name,version,branch,origin,installation"],
+                capture_output=True, text=True, timeout=5
+            )
+            if res.returncode != 0:
+                self._installed_fp_cache = []
+                self._installed_fp_cache_time = now
+                self._installed_fp_ids = set()
+                return []
+
+            installed = []
+            ids = set()
+            short_map = {}
+            for line in res.stdout.splitlines():
+                parts = [p.strip() for p in line.split("\t")]
+                if not parts or not parts[0] or parts[0].lower() in ("application", "application id"):
+                    continue
+                app_id = parts[0]
+                disp_name = parts[1] if len(parts) > 1 and parts[1] else app_id.split(".")[-1]
+                ver = parts[2] if len(parts) > 2 and parts[2] else (parts[3] if len(parts) > 3 else "stable")
+                branch = parts[3] if len(parts) > 3 else "stable"
+                origin = parts[4] if len(parts) > 4 else "flathub"
+                inst_scope = parts[5] if len(parts) > 5 else "system"
+
+                ids.add(app_id.lower())
+                tail = app_id.split(".")[-1].lower()
+                short_map[tail] = app_id
+                short_map[disp_name.lower()] = app_id
+
+                installed.append({
+                    "id": app_id,
+                    "name": app_id,
+                    "title": disp_name,
+                    "display_name": disp_name,
+                    "version": ver,
+                    "branch": branch,
+                    "origin": origin,
+                    "installation": inst_scope,
+                    "source": "flatpak",
+                    "is_installed": True,
+                    "icon": resolve_icon_name(tail, disp_name),
+                })
+
+            self._installed_fp_cache = installed
+            self._installed_fp_cache_time = now
+            self._installed_fp_ids = ids
+            self._installed_fp_short_names = short_map
+            return list(installed)
+        except Exception:
+            self._installed_fp_cache = []
+            self._installed_fp_cache_time = now
+            self._installed_fp_ids = set()
+            return []
+
+    def is_flatpak_app_installed(self, name_or_id: str) -> bool:
+        clean = (name_or_id or "").strip().lower()
+        if not clean:
+            return False
+        resolved = self.resolve_flatpak_id(clean).lower()
+        if self._installed_fp_cache is None:
+            self.get_installed_flatpaks()
+        if clean in self._installed_fp_ids or resolved in self._installed_fp_ids:
+            return True
+        if clean in self._installed_fp_short_names:
+            return True
+        for base_dir in (
+            Path("/var/lib/flatpak/app"),
+            Path.home() / ".local" / "share" / "flatpak" / "app",
+        ):
+            try:
+                if base_dir.exists():
+                    for candidate in (name_or_id.strip(), self.resolve_flatpak_id(name_or_id)):
+                        if candidate and (base_dir / candidate).exists():
+                            return True
+            except Exception:
+                pass
+        return False
+
+    def check_flatpak_updates(self) -> List[Dict[str, Any]]:
+        if not self.is_flatpak_installed():
+            return []
+        if getattr(self, "is_setting_up", False) or bool(getattr(self, "active_flatpak_ops", None)):
+            return []
+        updates: List[Dict[str, Any]] = []
+        seen = set()
+        inst_map = {item["name"].lower(): item.get("version", "installed") for item in self.get_installed_flatpaks()}
+        for extra_flags in ([], ["--user"]):
+            try:
+                proc = subprocess.run(
+                    ["flatpak", "remote-ls", "--updates", "--app", "--columns=application,name,version,branch"] + extra_flags,
+                    capture_output=True, text=True, timeout=10
+                )
+                if proc.returncode != 0 or not proc.stdout.strip():
+                    continue
+                for line in proc.stdout.splitlines():
+                    parts = [p.strip() for p in line.split("\t") if p.strip()]
+                    if not parts:
+                        parts = line.split()
+                    if not parts or parts[0].lower() in ("application", "name", "id"):
+                        continue
+                    app_id = parts[0]
+                    if app_id.lower() in seen:
+                        continue
+                    seen.add(app_id.lower())
+                    disp = parts[1] if len(parts) > 1 else app_id.split(".")[-1]
+                    new_ver = parts[2] if len(parts) > 2 else (parts[3] if len(parts) > 3 else "latest")
+                    old_ver = inst_map.get(app_id.lower(), "installed")
+                    updates.append({
+                        "name": app_id,
+                        "display_name": disp,
+                        "old_ver": old_ver,
+                        "new_ver": new_ver,
+                        "source": "flatpak",
+                        "desc": f"{disp} (Flathub Update)",
+                        "icon": resolve_icon_name(app_id.split(".")[-1].lower(), disp),
+                    })
+            except Exception:
+                pass
+        return updates
+
+    def search_flathub(self, query: str = "") -> List[Dict[str, Any]]:
+        return self.search_flatpaks(query)
+
+    def search_flatpaks(self, query: str = "") -> List[Dict[str, Any]]:
+        q = (query or "").strip().lower()
+        if q and q in self._search_cache:
+            return list(self._search_cache[q])
+
+        results: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+
+        # 1. Query Flathub API v2 / v1 when searching
+        if q:
+            try:
+                url = f"https://flathub.org/api/v1/apps/search/{urllib.parse.quote(q)}"
+                req = urllib.request.Request(url, headers={"User-Agent": "Ark-Store/3.0", "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    if isinstance(data, list):
+                        for item in data[:45]:
+                            app_id = (item.get("flatpakAppId") or item.get("id") or "").strip()
+                            if not app_id or app_id.lower() in seen_ids:
+                                continue
+                            seen_ids.add(app_id.lower())
+                            curated = next((c for c in self.CURATED_FLATPAK_APPS if c["id"].lower() == app_id.lower()), None)
+                            title = item.get("name") or (curated["title"] if curated else app_id.split(".")[-1])
+                            summary = item.get("summary") or (curated.get("summary", "") if curated else "Flathub application")
+                            icon_url = item.get("iconDesktopUrl") or item.get("iconMobileUrl") or ""
+                            if icon_url and icon_url.startswith("/"):
+                                icon_url = f"https://dl.flathub.org{icon_url}"
+                            tail = app_id.split(".")[-1].lower()
+                            icon = icon_url or (curated.get("icon") if curated else resolve_icon_name(tail, summary))
+                            ver = item.get("currentReleaseVersion") or (curated.get("version", "stable") if curated else "stable")
+                            results.append({
+                                "id": app_id,
+                                "name": app_id,
+                                "title": title,
+                                "display_name": title,
+                                "summary": summary,
+                                "desc": summary,
+                                "publisher": curated.get("publisher", "Flathub") if curated else "Flathub",
+                                "developer": curated.get("developer", "Flathub") if curated else "Flathub",
+                                "version": ver,
+                                "category": curated.get("category", "Flathub App") if curated else "Flathub App",
+                                "icon": icon,
+                                "icon_url": icon_url,
+                                "source": "flatpak",
+                                "is_installed": self.is_flatpak_app_installed(app_id),
+                                "store-url": f"https://flathub.org/apps/{app_id}",
+                                "store_url": f"https://flathub.org/apps/{app_id}",
+                            })
+            except Exception:
+                pass
+
+        # 2. Try local 'flatpak search' CLI if Flathub API returned nothing
+        if not results and q and self.is_flatpak_installed():
+            try:
+                proc = subprocess.run(
+                    ["flatpak", "search", "--columns=application,name,description,version,branch,remotes", q],
+                    capture_output=True, text=True, timeout=6
+                )
+                if proc.returncode == 0 and proc.stdout.strip() and "no matches found" not in proc.stdout.lower():
+                    for line in proc.stdout.splitlines():
+                        parts = [p.strip() for p in line.split("\t")]
+                        if len(parts) < 2:
+                            continue
+                        app_id = parts[0]
+                        if not app_id or "." not in app_id or app_id.lower() in seen_ids:
+                            continue
+                        seen_ids.add(app_id.lower())
+                        title = parts[1] if len(parts) > 1 and parts[1] else app_id.split(".")[-1]
+                        summary = parts[2] if len(parts) > 2 and parts[2] else "Flathub package"
+                        ver = parts[3] if len(parts) > 3 and parts[3] else "stable"
+                        tail = app_id.split(".")[-1].lower()
+                        results.append({
+                            "id": app_id,
+                            "name": app_id,
+                            "title": title,
+                            "display_name": title,
+                            "summary": summary,
+                            "desc": summary,
+                            "publisher": "Flathub",
+                            "developer": "Flathub",
+                            "version": ver,
+                            "category": "Flathub App",
+                            "icon": resolve_icon_name(tail, summary),
+                            "source": "flatpak",
+                            "is_installed": self.is_flatpak_app_installed(app_id),
+                            "store-url": f"https://flathub.org/apps/{app_id}",
+                            "store_url": f"https://flathub.org/apps/{app_id}",
+                        })
+            except Exception:
+                pass
+
+        # 3. Curated Flathub catalog matching / fallback
+        for app in self.CURATED_FLATPAK_APPS:
+            app_id = app["id"]
+            if app_id.lower() in seen_ids:
+                continue
+            if not q or (
+                q in app_id.lower()
+                or q in app.get("short_name", "").lower()
+                or q in app.get("title", "").lower()
+                or q in app.get("summary", "").lower()
+                or q in app.get("category", "").lower()
+                or q in app.get("publisher", "").lower()
+            ):
+                item = dict(app)
+                item["name"] = app_id
+                item["display_name"] = app["title"]
+                item["desc"] = app.get("summary", "")
+                item["source"] = "flatpak"
+                item["is_installed"] = self.is_flatpak_app_installed(app_id)
+                if q and (q == app.get("short_name", "").lower() or q == app.get("title", "").lower()):
+                    results.insert(0, item)
+                else:
+                    results.append(item)
+                seen_ids.add(app_id.lower())
+
+        if q:
+            self._search_cache[q] = list(results)
+        return results
+
+    def get_flatpak_details(self, name_or_id: str) -> Dict[str, Any]:
+        app_id = self.resolve_flatpak_id(name_or_id)
+        curated = next((c for c in self.CURATED_FLATPAK_APPS if c["id"].lower() == app_id.lower()), None)
+        is_inst = self.is_flatpak_app_installed(app_id)
+        inst_ver = ""
+        if is_inst:
+            for item in self.get_installed_flatpaks():
+                if item["id"].lower() == app_id.lower():
+                    inst_ver = item.get("version", "")
+                    break
+
+        # Try Flathub AppStream API v2
+        try:
+            url = f"https://flathub.org/api/v2/appstream/{urllib.parse.quote(app_id)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Ark-Store/3.0", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict) and data.get("name"):
+                    title = data.get("name") or (curated["title"] if curated else app_id.split(".")[-1])
+                    summary = data.get("summary") or (curated.get("summary", "") if curated else "")
+                    raw_desc = data.get("description") or summary
+                    clean_desc = re.sub(r'<[^>]+>', ' ', raw_desc).strip()
+                    clean_desc = re.sub(r'\s+', ' ', clean_desc)
+                    dev = data.get("developer_name") or (curated.get("publisher", "Flathub") if curated else "Flathub")
+                    lic = data.get("project_license") or "Open Source / Proprietary"
+                    releases = data.get("releases") or []
+                    ver = releases[0].get("version") if (releases and isinstance(releases[0], dict) and releases[0].get("version")) else (inst_ver or (curated.get("version", "stable") if curated else "stable"))
+                    icon_url = data.get("icon") or ""
+                    tail = app_id.split(".")[-1].lower()
+                    icon = icon_url or (curated.get("icon") if curated else resolve_icon_name(tail, summary))
+                    urls = data.get("urls") or {}
+                    homepage = urls.get("homepage") or f"https://flathub.org/apps/{app_id}"
+                    return {
+                        "id": app_id,
+                        "name": app_id,
+                        "title": title,
+                        "display_name": title,
+                        "summary": summary,
+                        "desc": summary,
+                        "extended_desc": clean_desc or summary,
+                        "description": clean_desc or summary,
+                        "version": ver,
+                        "installed_version": inst_ver or (ver if is_inst else ""),
+                        "publisher": dev,
+                        "developer": dev,
+                        "packager": dev,
+                        "maintainer": dev,
+                        "license": lic,
+                        "repo": "Flathub Official",
+                        "arch": "x86_64",
+                        "isize_str": "Sandboxed Flatpak",
+                        "csize_str": "Delta OStree Layers",
+                        "depends": ["flatpak", "org.freedesktop.Platform (Sandboxed Runtime)"],
+                        "store-url": f"https://flathub.org/apps/{app_id}",
+                        "store_url": f"https://flathub.org/apps/{app_id}",
+                        "url": homepage,
+                        "icon": icon,
+                        "icon_url": icon_url,
+                        "source": "flatpak",
+                        "is_installed": is_inst,
+                        "desktop_entry": app_id if is_inst else None,
+                    }
+        except Exception:
+            pass
+
+        title = curated["title"] if curated else get_app_display_name(app_id.split(".")[-1])
+        summary = curated.get("summary", "Flathub Sandboxed Application") if curated else "Flathub Sandboxed Application"
+        desc = curated.get("description", summary) if curated else summary
+        dev = curated.get("publisher", "Flathub Community") if curated else "Flathub Community"
+        ver = inst_ver or (curated.get("version", "stable") if curated else "stable")
+        icon = curated.get("icon", resolve_icon_name(app_id.split(".")[-1].lower(), summary)) if curated else resolve_icon_name(app_id.split(".")[-1].lower(), summary)
+        store_url = curated.get("store_url", f"https://flathub.org/apps/{app_id}") if curated else f"https://flathub.org/apps/{app_id}"
+
+        return {
+            "id": app_id,
+            "name": app_id,
+            "title": title,
+            "display_name": title,
+            "summary": summary,
+            "desc": summary,
+            "extended_desc": desc,
+            "description": desc,
+            "version": ver,
+            "installed_version": inst_ver,
+            "publisher": dev,
+            "developer": dev,
+            "packager": dev,
+            "maintainer": dev,
+            "license": "Open Source / Flathub",
+            "repo": "Flathub Official",
+            "arch": "x86_64",
+            "isize_str": "Sandboxed Flatpak",
+            "csize_str": "Delta OSTree Layers",
+            "depends": ["flatpak", "org.freedesktop.Platform"],
+            "store-url": store_url,
+            "store_url": store_url,
+            "url": store_url,
+            "icon": icon,
+            "source": "flatpak",
+            "is_installed": is_inst,
+            "desktop_entry": app_id if is_inst else None,
+        }
+
+    def _stream_flatpak_cmd(self, fp_args: List[str], env: Dict[str, str], progress_cb) -> Tuple[int, List[str]]:
+        """Stream flatpak CLI output with real-time percentage parsing."""
+        proc = subprocess.Popen(
+            fp_args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            env=env
+        )
+        output_lines: List[str] = []
+        buf = bytearray()
+        cur_frac = 0.14
+        if proc.stdout:
+            while True:
+                ch = proc.stdout.read(1)
+                if not ch:
+                    if buf:
+                        clean = ANSI_ESCAPE.sub("", buf.decode("utf-8", errors="replace")).strip()
+                        if clean:
+                            output_lines.append(clean)
+                            SnapManager._call_progress(progress_cb, cur_frac, clean[:95])
+                    break
+                if ch in (b"\r", b"\n"):
+                    if buf:
+                        clean = ANSI_ESCAPE.sub("", buf.decode("utf-8", errors="replace")).strip()
+                        buf.clear()
+                        if clean:
+                            output_lines.append(clean)
+                            if len(output_lines) > 200:
+                                del output_lines[:-150]
+                            m_pct = re.search(r'(\d{1,3})%', clean)
+                            if m_pct:
+                                pct_val = min(99, max(1, int(m_pct.group(1))))
+                                cur_frac = round(0.14 + (pct_val / 100.0) * 0.82, 3)
+                            else:
+                                cur_frac = min(0.92, round(cur_frac + 0.03, 3))
+                            SnapManager._call_progress(progress_cb, cur_frac, clean[:95])
+                else:
+                    buf.extend(ch)
+        proc.wait()
+        return proc.returncode, output_lines
+
+    def install_flatpak(self, name_or_id: str, progress_cb=None, complete_cb=None):
+        """Install an application from Flathub with automatic remote setup and user/system fallback."""
+        def _task():
+            app_id = self.resolve_flatpak_id(name_or_id)
+            if not self.is_flatpak_installed():
+                err_msg = "Flatpak runtime is not installed. Click 'Auto-Configure Flathub' on the Flathub page first."
+                SnapManager._call_progress(progress_cb, 0.0, err_msg)
+                SnapManager._call_complete(complete_cb, False, "install", name_or_id, err_msg)
+                return
+
+            env = os.environ.copy()
+            if ASKPASS_SCRIPT.exists():
+                env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
+            env["LC_ALL"] = "C"
+
+            fp_key = app_id.strip().lower()
+            self.active_flatpak_ops[fp_key] = (0.10, f"Preparing {app_id} from Flathub...")
+
+            def _tracked_prog(f, m=""):
+                if isinstance(f, (int, float)):
+                    self.active_flatpak_ops[fp_key] = (float(f), str(m))
+                SnapManager._call_progress(progress_cb, f, m)
+
+            _tracked_prog(0.10, f"Connecting to Flathub for {app_id}...")
+
+            try:
+                with self._fp_op_lock:
+                    if not self.is_flathub_configured():
+                        _tracked_prog(0.12, "Adding official Flathub remote...")
+                        subprocess.run(
+                            ["flatpak", "remote-add", "--user", "--if-not-exists", "flathub", self.FLATHUB_REMOTE_URL],
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=30
+                        )
+
+                    # Try user installation first if user flathub remote exists, else system installation
+                    rc, lines = self._stream_flatpak_cmd(
+                        ["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", app_id],
+                        env, _tracked_prog
+                    )
+                    if rc != 0:
+                        rc, lines = self._stream_flatpak_cmd(
+                            ["flatpak", "install", "-y", "--noninteractive", "flathub", app_id],
+                            env, _tracked_prog
+                        )
+                    if rc != 0:
+                        sudo_flag = "-n" if PackageManager.is_passwordless_configured() else "-A"
+                        rc, lines = self._stream_flatpak_cmd(
+                            ["sudo", sudo_flag, "flatpak", "install", "-y", "--noninteractive", "flathub", app_id],
+                            env, _tracked_prog
+                        )
+
+                if rc == 0:
+                    self.invalidate_cache()
+                    SnapManager._call_progress(progress_cb, 1.0, f"✓ Installed {app_id} from Flathub!")
+                    SnapManager._call_complete(complete_cb, True, "install", name_or_id, "")
+                else:
+                    err = "\\n".join(lines[-3:]) if lines else f"Flatpak exited with code {rc}"
+                    SnapManager._call_progress(progress_cb, 0.0, f"Installation failed: {err}")
+                    SnapManager._call_complete(complete_cb, False, "install", name_or_id, err)
+            except Exception as e:
+                SnapManager._call_progress(progress_cb, 0.0, f"Error: {e}")
+                SnapManager._call_complete(complete_cb, False, "install", name_or_id, str(e))
+            finally:
+                self.active_flatpak_ops.pop(fp_key, None)
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def remove_flatpak(self, name_or_id: str, delete_data: bool = False, progress_cb=None, complete_cb=None):
+        """Uninstall a Flatpak app (and optionally purge ~/.var/app/<app_id> sandbox data)."""
+        def _task():
+            app_id = self.resolve_flatpak_id(name_or_id)
+            if not self.is_flatpak_installed():
+                err_msg = "Flatpak is not installed."
+                SnapManager._call_progress(progress_cb, 0.0, err_msg)
+                SnapManager._call_complete(complete_cb, False, "remove", name_or_id, err_msg)
+                return
+
+            env = os.environ.copy()
+            if ASKPASS_SCRIPT.exists():
+                env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
+            env["LC_ALL"] = "C"
+
+            SnapManager._call_progress(progress_cb, 0.15, f"Uninstalling {app_id}...")
+            extra = ["--delete-data"] if delete_data else []
+            try:
+                with self._fp_op_lock:
+                    rc, lines = self._stream_flatpak_cmd(
+                        ["flatpak", "uninstall", "--user", "-y", "--noninteractive"] + extra + [app_id],
+                        env, progress_cb
+                    )
+                    if rc != 0:
+                        rc, lines = self._stream_flatpak_cmd(
+                            ["flatpak", "uninstall", "-y", "--noninteractive"] + extra + [app_id],
+                            env, progress_cb
+                        )
+                    if rc != 0:
+                        sudo_flag = "-n" if PackageManager.is_passwordless_configured() else "-A"
+                        rc, lines = self._stream_flatpak_cmd(
+                            ["sudo", sudo_flag, "flatpak", "uninstall", "-y", "--noninteractive"] + extra + [app_id],
+                            env, progress_cb
+                        )
+                if rc == 0:
+                    self.invalidate_cache()
+                    SnapManager._call_progress(progress_cb, 1.0, f"✓ Removed {app_id} successfully!")
+                    SnapManager._call_complete(complete_cb, True, "remove", name_or_id, "")
+                else:
+                    err = "\\n".join(lines[-3:]) if lines else f"Flatpak uninstall exited with {rc}"
+                    SnapManager._call_progress(progress_cb, 0.0, f"Removal failed: {err}")
+                    SnapManager._call_complete(complete_cb, False, "remove", name_or_id, err)
+            except Exception as e:
+                SnapManager._call_progress(progress_cb, 0.0, f"Error: {e}")
+                SnapManager._call_complete(complete_cb, False, "remove", name_or_id, str(e))
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def update_flatpak(self, name_or_id: str = "", progress_cb=None, complete_cb=None):
+        """Update a specific Flatpak application or all installed Flatpak apps."""
+        def _task():
+            app_id = self.resolve_flatpak_id(name_or_id) if name_or_id and name_or_id not in ("system", "--all", "all") else ""
+            if not self.is_flatpak_installed():
+                err_msg = "Flatpak is not installed."
+                SnapManager._call_progress(progress_cb, 0.0, err_msg)
+                SnapManager._call_complete(complete_cb, False, "update", name_or_id, err_msg)
+                return
+
+            env = os.environ.copy()
+            if ASKPASS_SCRIPT.exists():
+                env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
+            env["LC_ALL"] = "C"
+
+            target_args = [app_id] if app_id else []
+            SnapManager._call_progress(progress_cb, 0.12, f"Updating {app_id or 'Flathub applications'}...")
+            try:
+                with self._fp_op_lock:
+                    rc1, lines1 = self._stream_flatpak_cmd(
+                        ["flatpak", "update", "--user", "-y", "--noninteractive"] + target_args,
+                        env, progress_cb
+                    )
+                    rc2, lines2 = self._stream_flatpak_cmd(
+                        ["flatpak", "update", "-y", "--noninteractive"] + target_args,
+                        env, progress_cb
+                    )
+                    rc = 0 if (rc1 == 0 or rc2 == 0) else rc2
+                    lines = lines1 + lines2
+                if rc == 0:
+                    self.invalidate_cache()
+                    SnapManager._call_progress(progress_cb, 1.0, f"✓ Updated {app_id or 'Flathub packages'}!")
+                    SnapManager._call_complete(complete_cb, True, "update", name_or_id, "")
+                else:
+                    err = "\\n".join(lines[-3:]) if lines else f"Flatpak update exited with {rc}"
+                    SnapManager._call_progress(progress_cb, 0.0, f"Update failed: {err}")
+                    SnapManager._call_complete(complete_cb, False, "update", name_or_id, err)
+            except Exception as e:
+                SnapManager._call_progress(progress_cb, 0.0, f"Error: {e}")
+                SnapManager._call_complete(complete_cb, False, "update", name_or_id, str(e))
+
+        threading.Thread(target=_task, daemon=True).start()
+
+    def launch_flatpak(self, name_or_id: str) -> bool:
+        app_id = self.resolve_flatpak_id(name_or_id)
+        if not app_id:
+            return False
+        env = get_gui_launch_env()
+        if shutil.which("xhost"):
+            try:
+                subprocess.run(["xhost", "+local:"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception:
+                pass
+        try:
+            subprocess.Popen(["flatpak", "run", app_id], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            try:
+                subprocess.Popen(["gtk-launch", f"{app_id}.desktop"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                return False
 
 
 class SnapManager:
@@ -5633,6 +7285,7 @@ class SnapManager:
             self._installed_snaps_names = set()
             self._status_cache = None
             self._status_cache_time = 0.0
+        invalidate_desktop_caches()
 
     def is_snapd_installed(self) -> bool:
         """Check if snap command is available in PATH or at /usr/bin/snap."""
@@ -5906,6 +7559,10 @@ class SnapManager:
         clean = (name or "").strip().lower()
         if not clean:
             return False
+        if clean.endswith(".desktop"):
+            clean = clean[:-8]
+        if "_" in clean:
+            clean = clean.split("_")[0]
         if hasattr(self, "_installed_snaps_cache") and self._installed_snaps_cache is not None:
             return clean in getattr(self, "_installed_snaps_names", set())
         try:
@@ -5988,6 +7645,8 @@ class SnapManager:
     def check_snap_updates(self) -> List[Dict[str, Any]]:
         """Check for upgradable snaps using 'snap refresh --list'."""
         if not self.is_snapd_installed():
+            return []
+        if getattr(self, "is_setting_up", False) or bool(getattr(self, "active_snap_ops", None)):
             return []
         updates: List[Dict[str, Any]] = []
         try:
@@ -6143,7 +7802,7 @@ class SnapManager:
                 url = f"https://api.snapcraft.io/v2/snaps/find?q={urllib.parse.quote(q)}&fields=title,summary,publisher,media"
                 req = urllib.request.Request(
                     url,
-                    headers={"Snap-Device-Series": "16", "User-Agent": "Aura-Store/1.0"}
+                    headers={"Snap-Device-Series": "16", "User-Agent": "ArkST-Store/1.0"}
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
@@ -6279,7 +7938,7 @@ class SnapManager:
             url = f"https://api.snapcraft.io/v2/snaps/info/{urllib.parse.quote(snap_name)}?fields=title,summary,description,license,confinement,media,publisher,version,download"
             req = urllib.request.Request(
                 url,
-                headers={"Snap-Device-Series": "16", "User-Agent": "Aura-Store/1.0"}
+                headers={"Snap-Device-Series": "16", "User-Agent": "ArkST-Store/1.0"}
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -6521,13 +8180,19 @@ class SnapManager:
 
         threading.Thread(target=_task, daemon=True).start()
 
-    def remove_snap(self, name: str, progress_cb = None, complete_cb = None):
-        """Remove a snap package using _stream_snap_cmd with live progress and sudo fallback."""
+    def remove_snap(self, name: str, purge: bool = False, progress_cb = None, complete_cb = None):
+        """Remove a snap package using _stream_snap_cmd with live progress, --terminate, and optional --purge."""
+        clean_name = (name or "").strip().lower()
+        if clean_name.endswith(".desktop"):
+            clean_name = clean_name[:-8]
+        if "_" in clean_name:
+            clean_name = clean_name.split("_")[0]
+
         def _task():
             if not self.is_snapd_installed():
                 err_msg = "snapd is not installed."
                 self._call_progress(progress_cb, 0.0, err_msg)
-                self._call_complete(complete_cb, False, "remove", name, err_msg)
+                self._call_complete(complete_cb, False, "remove", clean_name, err_msg)
                 return
 
             env = os.environ.copy()
@@ -6535,21 +8200,38 @@ class SnapManager:
                 env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
             env["LC_ALL"] = "C"
 
-            self._call_progress(progress_cb, 0.08, f"Removing snap package {name}...")
+            snap_key = clean_name
+            if not hasattr(self, "active_snap_ops"):
+                self.active_snap_ops = {}
+            self.active_snap_ops[snap_key] = (0.08, f"Removing snap package {clean_name}...")
+
+            def _tracked_prog(f, m=""):
+                if isinstance(f, (int, float)):
+                    self.active_snap_ops[snap_key] = (float(f), str(m))
+                self._call_progress(progress_cb, f, m)
+
+            _tracked_prog(0.08, f"Removing snap package {clean_name}...")
+            cmd = ["snap", "remove", "--terminate"]
+            if purge:
+                cmd.append("--purge")
+            cmd.append(clean_name)
+
             try:
-                rc, output_lines = self._stream_snap_cmd(["snap", "remove", name], env, progress_cb, f"Removing snap package {name}...")
+                rc, output_lines = self._stream_snap_cmd(cmd, env, _tracked_prog, f"Removing snap package {clean_name}...")
                 if rc == 0:
-                    self._installed_snaps_cache = None
-                    self._status_cache = None
-                    self._call_progress(progress_cb, 1.0, f"Successfully removed {name}!")
-                    self._call_complete(complete_cb, True, "remove", name, "")
+                    self.invalidate_cache()
+                    self._call_progress(progress_cb, 1.0, f"Successfully removed {clean_name}!")
+                    self._call_complete(complete_cb, True, "remove", clean_name, "")
                 else:
                     err = "\n".join(output_lines[-3:]) if output_lines else f"Exited with code {rc}"
                     self._call_progress(progress_cb, 0.0, f"Removal failed: {err}")
-                    self._call_complete(complete_cb, False, "remove", name, err)
+                    self._call_complete(complete_cb, False, "remove", clean_name, err)
             except Exception as e:
                 self._call_progress(progress_cb, 0.0, f"Error: {e}")
-                self._call_complete(complete_cb, False, "remove", name, str(e))
+                self._call_complete(complete_cb, False, "remove", clean_name, str(e))
+            finally:
+                if hasattr(self, "active_snap_ops"):
+                    self.active_snap_ops.pop(snap_key, None)
 
         threading.Thread(target=_task, daemon=True).start()
 
@@ -6589,6 +8271,56 @@ class SnapManager:
         """List curated and discovered snap applications."""
         return self.search_snaps(query)
 
+    def launch_snap(self, name: str) -> bool:
+        """Launch an installed Snap application with full Wayland/X11 environment and desktop shortcut fallback."""
+        clean = (name or "").strip().lower()
+        if not clean:
+            return False
+        snap_pkg = clean.split("_")[0]
+        env = get_gui_launch_env()
+        if shutil.which("xhost"):
+            try:
+                subprocess.run(["xhost", "+local:"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception:
+                pass
+
+        # 1. Check /var/lib/snapd/desktop/applications/<snap>_*.desktop for the exact Exec command
+        snap_dt_dir = Path("/var/lib/snapd/desktop/applications")
+        if snap_dt_dir.exists():
+            candidates = list(snap_dt_dir.glob(f"{snap_pkg}_*.desktop"))
+            if candidates:
+                dt_file = candidates[0]
+                if shutil.which("gio"):
+                    try:
+                        subprocess.Popen(["gio", "launch", str(dt_file)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        return True
+                    except Exception:
+                        pass
+                try:
+                    for line in dt_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                        if line.startswith("Exec="):
+                            exec_cmd = re.sub(r'\s+%[fFuUdDnNickvm]', '', line[5:]).strip()
+                            if exec_cmd:
+                                subprocess.Popen(["sh", "-c", exec_cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                return True
+                except Exception:
+                    pass
+
+        # 2. Fallback to 'snap run <snap_pkg>' or '/snap/bin/<snap_pkg>'
+        for bin_cand in (f"/snap/bin/{snap_pkg}", f"/var/lib/snapd/snap/bin/{snap_pkg}"):
+            if Path(bin_cand).exists():
+                try:
+                    subprocess.Popen([bin_cand], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return True
+                except Exception:
+                    pass
+
+        try:
+            subprocess.Popen(["snap", "run", snap_pkg], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
+
     @staticmethod
     def _call_progress(cb, frac: float, msg: str):
         if not cb:
@@ -6616,8 +8348,9 @@ class SnapManager:
         try:
             import inspect
             sig = inspect.signature(cb)
+            has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values())
             num = len(sig.parameters)
-            if num == 4:
+            if has_varargs or num >= 4:
                 cb(ok, action, name, err_or_msg if not ok else "")
             elif num == 2:
                 cb(ok, err_or_msg)
@@ -6642,13 +8375,16 @@ class ContainerManager:
     Features:
     - Auto-detection of container runtime (distrobox / docker).
     - Auto-installation of distrobox via pacman if missing.
-    - Auto-creation of dedicated 'aura-box' container.
+    - Auto-creation of dedicated 'arkst-box' container (and automatic migration/removal of legacy 'aura-box').
     - Installation of container applications.
     - Automatic creation and deletion of host desktop shortcuts in ~/.local/share/applications.
     - Independent search that does not pollute default system search.
     """
-    CONTAINER_NAME = "aura-box"
+    CONTAINER_NAME = "arkst-box"
+    LEGACY_CONTAINER_NAMES = ("aura-box", "ark-box")
     SHORTCUTS_DIR = Path.home() / ".local" / "share" / "applications"
+    LAUNCHER_BIN_DIR = Path.home() / ".local" / "share" / "arkst" / "bin"
+    LAUNCHER_SCRIPT = LAUNCHER_BIN_DIR / "arkst-box-launch"
 
     CURATED_CONTAINER_APPS = [
         {
@@ -6659,6 +8395,7 @@ class ContainerManager:
             "icon": "blender",
             "binary": "blender",
             "pkg": "blender",
+            "extra_pkgs": ["mesa-gl", "mesa-egl", "mesa-gles", "libxi", "libxrender", "libxfixes", "libxxf86vm", "libxkbcommon", "font-noto", "dbus-x11"],
             "size": "280 MB",
         },
         {
@@ -6669,6 +8406,8 @@ class ContainerManager:
             "icon": "code",
             "binary": "code-oss",
             "pkg": "code-oss",
+            "extra_pkgs": ["libx11", "libxkbfile", "libsecret", "nss", "dbus-x11", "font-noto", "adwaita-icon-theme", "mesa-gl", "mesa-egl", "git", "bash"],
+            "launch_args": "--no-sandbox --disable-gpu-sandbox",
             "size": "95 MB",
         },
         {
@@ -6679,6 +8418,7 @@ class ContainerManager:
             "icon": "com.obsproject.Studio",
             "binary": "obs",
             "pkg": "obs-studio",
+            "extra_pkgs": ["qt6-qtwayland", "qt5-qtwayland", "mesa-gl", "mesa-egl", "dbus-x11", "font-noto", "pulseaudio-utils", "ffmpeg"],
             "size": "70 MB",
         },
         {
@@ -6689,6 +8429,8 @@ class ContainerManager:
             "icon": "chromium",
             "binary": "chromium-browser",
             "pkg": "chromium",
+            "extra_pkgs": ["nss", "freetype", "harfbuzz", "ca-certificates", "ttf-freefont", "font-noto", "dbus-x11", "mesa-gl", "mesa-egl", "pulseaudio-utils"],
+            "launch_args": "--no-sandbox --disable-dev-shm-usage --test-type",
             "size": "115 MB",
         },
         {
@@ -6699,6 +8441,7 @@ class ContainerManager:
             "icon": "gimp",
             "binary": "gimp",
             "pkg": "gimp",
+            "extra_pkgs": ["dbus-x11", "font-noto", "adwaita-icon-theme", "mesa-gl"],
             "size": "140 MB",
         },
         {
@@ -6709,6 +8452,7 @@ class ContainerManager:
             "icon": "org.inkscape.Inkscape",
             "binary": "inkscape",
             "pkg": "inkscape",
+            "extra_pkgs": ["dbus-x11", "font-noto", "adwaita-icon-theme", "ttf-dejavu"],
             "size": "110 MB",
         },
         {
@@ -6719,6 +8463,7 @@ class ContainerManager:
             "icon": "libreoffice-startcenter",
             "binary": "libreoffice",
             "pkg": "libreoffice",
+            "extra_pkgs": ["ttf-dejavu", "font-noto", "dbus-x11", "adwaita-icon-theme", "mesa-gl"],
             "size": "450 MB",
         },
         {
@@ -6726,9 +8471,11 @@ class ContainerManager:
             "name": "Telegram Desktop",
             "desc": "Fast, cloud-based messaging with cross-device sync",
             "category": "Social & Communication",
-            "icon": "telegram",
-            "binary": "telegram-desktop",
+            "icon": "org.telegram.desktop",
+            "binary": "Telegram",
             "pkg": "telegram-desktop",
+            "extra_pkgs": ["qt6-qtwayland", "qt5-qtwayland", "dbus-x11", "font-noto", "pulseaudio-utils"],
+            "post_install_cmd": "ln -sf /usr/bin/Telegram /usr/bin/telegram-desktop 2>/dev/null || true",
             "size": "55 MB",
         },
         {
@@ -6739,6 +8486,7 @@ class ContainerManager:
             "icon": "firefox-developer-edition",
             "binary": "firefox",
             "pkg": "firefox",
+            "extra_pkgs": ["dbus-x11", "font-noto", "ttf-dejavu", "adwaita-icon-theme", "mesa-gl", "mesa-egl", "pulseaudio-utils", "alsa-plugins-pulse"],
             "size": "95 MB",
         },
         {
@@ -6749,6 +8497,7 @@ class ContainerManager:
             "icon": "kdenlive",
             "binary": "kdenlive",
             "pkg": "kdenlive",
+            "extra_pkgs": ["qt6-qtwayland", "qt5-qtwayland", "dbus-x11", "breeze-icons", "font-noto", "ffmpeg", "pulseaudio-utils"],
             "size": "190 MB",
         },
         {
@@ -6759,6 +8508,7 @@ class ContainerManager:
             "icon": "audacity",
             "binary": "audacity",
             "pkg": "audacity",
+            "extra_pkgs": ["dbus-x11", "font-noto", "adwaita-icon-theme", "pulseaudio-utils", "alsa-plugins-pulse"],
             "size": "45 MB",
         },
         {
@@ -6769,6 +8519,8 @@ class ContainerManager:
             "icon": "vlc",
             "binary": "vlc",
             "pkg": "vlc",
+            "extra_pkgs": ["vlc-qt", "vlc-xorg", "qt5-qtwayland", "dbus-x11", "font-noto", "ttf-dejavu", "adwaita-icon-theme", "mesa-gl", "mesa-egl", "pulseaudio-utils", "alsa-plugins-pulse"],
+            "launch_args": "--no-qt-privacy-ask",
             "size": "40 MB",
         },
     ]
@@ -6793,6 +8545,357 @@ class ContainerManager:
         with self._lock:
             self._status_cache = None
             self._status_cache_time = 0.0
+        invalidate_desktop_caches()
+
+    def _resolve_app_meta(self, app_id: str) -> Dict[str, Any]:
+        clean = (app_id or "").strip().lower()
+        for app in self.CURATED_CONTAINER_APPS:
+            if app["id"].lower() == clean or app.get("pkg", "").lower() == clean:
+                return dict(app)
+        for app in getattr(self, "EXTENDED_ALPINE_APPS", []):
+            if app["id"].lower() == clean or app.get("pkg", "").lower() == clean:
+                return dict(app)
+        return {
+            "id": app_id,
+            "name": get_app_display_name(app_id),
+            "desc": f"Container application ({app_id})",
+            "category": "Utility",
+            "icon": resolve_icon_name(app_id),
+            "binary": app_id,
+            "pkg": app_id,
+            "extra_pkgs": ["dbus-x11", "font-noto", "adwaita-icon-theme"],
+        }
+
+    def _ensure_launcher_script(self) -> Path:
+        """
+        Ensure the self-healing host launcher script ~/.local/share/arkst/bin/arkst-box-launch exists.
+        This script handles:
+        - Starting arkst-box if paused/stopped
+        - Authorizing XWayland/X11 connections via 'xhost +local:'
+        - Auto-detecting WAYLAND_DISPLAY, DISPLAY, XDG_RUNTIME_DIR, and PULSE_SERVER
+        - Self-healing VLC inside arkst-box (restoring clean binary if corrupted and ensuring GUI plugins)
+        - Passing QT_X11_NO_MITSHM=1, _X11_NO_MITSHM=1, and LIBGL_ALWAYS_SOFTWARE=1 for rock-solid GUI rendering
+        - Passing '--no-sandbox' for Chromium/Code-OSS inside Docker
+        - Running with --user arkst-user without unsupported flags
+        """
+        script_path = self.LAUNCHER_SCRIPT
+        script_content = f'''#!/usr/bin/env sh
+# ArkST Box Host Application Launcher (Auto-generated by ArkST)
+RAW_APP_ID="$1"
+if [ -z "$RAW_APP_ID" ]; then
+    exit 1
+fi
+shift
+
+APP_ID="$(echo "$RAW_APP_ID" | sed 's/^arkst-box-//')"
+CONTAINER="{self.CONTAINER_NAME}"
+UID_VAL="$(id -u)"
+GID_VAL="$(id -g)"
+export XDG_RUNTIME_DIR="${{XDG_RUNTIME_DIR:-/run/user/$UID_VAL}}"
+
+# Auto-detect Wayland socket from user environment or standard runtime paths
+if [ -z "$WAYLAND_DISPLAY" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        WAYLAND_DISPLAY="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p')"
+    fi
+    if [ -z "$WAYLAND_DISPLAY" ]; then
+        for cand in wayland-1 wayland-0; do
+            if [ -S "$XDG_RUNTIME_DIR/$cand" ]; then
+                export WAYLAND_DISPLAY="$cand"
+                break
+            fi
+        done
+        if [ -z "$WAYLAND_DISPLAY" ]; then
+            for sock in "$XDG_RUNTIME_DIR"/wayland-*; do
+                case "$sock" in
+                    *.lock) continue ;;
+                esac
+                if [ -S "$sock" ]; then
+                    export WAYLAND_DISPLAY="$(basename "$sock")"
+                    break
+                fi
+            done
+        fi
+    fi
+fi
+
+# Auto-detect X11 / XWayland display
+if [ -z "$DISPLAY" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        DISPLAY="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^DISPLAY=//p')"
+    fi
+    if [ -z "$DISPLAY" ]; then
+        for xnum in 1 0 2; do
+            if [ -S "/tmp/.X11-unix/X$xnum" ]; then
+                export DISPLAY=":$xnum"
+                break
+            fi
+        done
+        [ -z "$DISPLAY" ] && export DISPLAY=":1"
+    fi
+fi
+
+# Configure platform display variables dynamically based on active session
+if [ -n "$WAYLAND_DISPLAY" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+    PLATFORM_ARGS="-e QT_QPA_PLATFORM=wayland;xcb -e GDK_BACKEND=wayland,x11 -e MOZ_ENABLE_WAYLAND=1 -e ELECTRON_OZONE_PLATFORM_HINT=auto"
+else
+    PLATFORM_ARGS="-e QT_QPA_PLATFORM=xcb -e GDK_BACKEND=x11 -e MOZ_ENABLE_WAYLAND=0"
+fi
+
+# Authorize local container connections to XWayland / X11
+if command -v xhost >/dev/null 2>&1; then
+    xhost +SI:localuser:root >/dev/null 2>&1 || true
+    xhost +local: >/dev/null 2>&1 || true
+fi
+
+# Universal Hardware Acceleration & GPU Vendor Negotiation (AMD, Intel, NVIDIA, Software fallback)
+SW_GL_ARG=""
+IS_NVIDIA_PROPRIETARY=0
+for dev_drv in /sys/class/drm/card[0-9]*/device/driver /sys/class/drm/renderD[0-9]*/device/driver; do
+    if [ -e "$dev_drv" ]; then
+        drv_name="$(basename "$(readlink -f "$dev_drv" 2>/dev/null)" 2>/dev/null)"
+        if [ "$drv_name" = "nvidia" ]; then
+            IS_NVIDIA_PROPRIETARY=1
+            break
+        fi
+    fi
+done
+
+if [ "$IS_NVIDIA_PROPRIETARY" -eq 1 ]; then
+    # Proprietary NVIDIA driver active on host: check if NVIDIA Container Toolkit has injected libraries into container
+    if ! docker exec "$CONTAINER" sh -c "test -f /usr/lib/libGLX_nvidia.so.0 -o -f /usr/lib64/libGLX_nvidia.so.0" >/dev/null 2>&1; then
+        # Safe software llvmpipe fallback to prevent 'failed to load driver: nvidia-drm' crash
+        SW_GL_ARG="-e LIBGL_ALWAYS_SOFTWARE=1 -e MESA_LOADER_DRIVER_OVERRIDE=llvmpipe"
+    fi
+elif [ ! -d /dev/dri ]; then
+    # No DRI device available (headless or virtualized without 3D pass-through)
+    SW_GL_ARG="-e LIBGL_ALWAYS_SOFTWARE=1"
+fi
+# For AMD (amdgpu/radeon), Intel (i915/xe/iris), and Nouveau: SW_GL_ARG remains empty, enabling full native hardware acceleration via /dev/dri!
+
+# Ensure container is running
+if [ "$(docker inspect -f '{{{{.State.Running}}}}' "$CONTAINER" 2>/dev/null)" != "true" ]; then
+    docker start "$CONTAINER" >/dev/null 2>&1 || exit 1
+fi
+
+# Query render node GID from host dynamically
+RENDER_GID="$(stat -c '%g' /dev/dri/renderD128 2>/dev/null || stat -c '%g' /dev/dri/card0 2>/dev/null || stat -c '%g' /dev/dri/card1 2>/dev/null || echo '')"
+
+# Ensure user, groups and runtime directories exist inside container matching host UID and GID
+docker exec "$CONTAINER" sh -c "
+    id -u arkst-user >/dev/null 2>&1 || (adduser -D -u $UID_VAL -s /bin/sh arkst-user 2>/dev/null; addgroup arkst-user video 2>/dev/null; addgroup arkst-user audio 2>/dev/null; addgroup arkst-user input 2>/dev/null)
+    if [ -n \"$RENDER_GID\" ]; then
+        addgroup -g \"$RENDER_GID\" host-render 2>/dev/null || true
+        addgroup arkst-user host-render 2>/dev/null || true
+    fi
+    mkdir -p /home/arkst-user/.config /home/arkst-user/.cache /home/arkst-user/.local '$XDG_RUNTIME_DIR'
+    chown -R $UID_VAL:$GID_VAL /home/arkst-user 2>/dev/null || true
+" >/dev/null 2>&1 || true
+
+# Map app_id to container binary and required container flags
+BIN_CMD="$APP_ID"
+EXTRA_ARGS=""
+case "$APP_ID" in
+    vlc)
+        BIN_CMD="vlc"
+        EXTRA_ARGS="--no-qt-privacy-ask"
+        # Self-heal VLC on Alpine: restore clean binary if corrupted by getppid, and ensure GUI plugins are installed
+        docker exec "$CONTAINER" sh -c '
+            if strings /usr/bin/vlc 2>/dev/null | grep -q getppid; then
+                apk fix --force vlc >/dev/null 2>&1 || true
+            fi
+            if ! apk info -e vlc-qt >/dev/null 2>&1; then
+                apk --wait 30 add --no-cache vlc-qt vlc-xorg qt5-qtwayland dbus-x11 font-noto ttf-dejavu adwaita-icon-theme >/dev/null 2>&1 || true
+            fi
+        ' >/dev/null 2>&1
+        ;;
+    code|code-oss)
+        BIN_CMD="code-oss"
+        EXTRA_ARGS="--no-sandbox --disable-gpu-sandbox"
+        ;;
+    chromium|chromium-browser)
+        if docker exec "$CONTAINER" sh -c "command -v chromium-browser >/dev/null 2>&1"; then
+            BIN_CMD="chromium-browser"
+        else
+            BIN_CMD="chromium"
+        fi
+        EXTRA_ARGS="--no-sandbox --disable-dev-shm-usage --test-type"
+        ;;
+    telegram|telegram-desktop|Telegram)
+        if docker exec "$CONTAINER" sh -c "command -v telegram-desktop >/dev/null 2>&1"; then
+            BIN_CMD="telegram-desktop"
+        elif docker exec "$CONTAINER" sh -c "command -v Telegram >/dev/null 2>&1"; then
+            BIN_CMD="Telegram"
+        else
+            BIN_CMD="Telegram"
+        fi
+        ;;
+    obs-studio|obs)
+        BIN_CMD="obs"
+        ;;
+    libreoffice-fresh|libreoffice)
+        BIN_CMD="libreoffice"
+        ;;
+    firefox-developer-edition|firefox)
+        BIN_CMD="firefox"
+        ;;
+    mpv)
+        BIN_CMD="mpv"
+        if [ "$#" -eq 0 ]; then
+            EXTRA_ARGS="--player-operation-mode=pseudo-gui"
+        fi
+        ;;
+    blender)
+        BIN_CMD="blender"
+        ;;
+    gimp)
+        BIN_CMD="gimp"
+        ;;
+    inkscape)
+        BIN_CMD="inkscape"
+        ;;
+    audacity)
+        BIN_CMD="audacity"
+        ;;
+    kdenlive)
+        BIN_CMD="kdenlive"
+        ;;
+    krita)
+        BIN_CMD="krita"
+        ;;
+    *)
+        if docker exec "$CONTAINER" sh -c "command -v '$APP_ID' >/dev/null 2>&1"; then
+            BIN_CMD="$APP_ID"
+        else
+            DYN_BIN="$(docker exec "$CONTAINER" sh -c '
+                for dt in /usr/share/applications/*'"$APP_ID"'*.desktop; do
+                    if [ -f "$dt" ]; then
+                        cut -d= -f2 "$dt" | awk \'{{print $1}}\' | head -n 1
+                        break
+                    fi
+                done
+            ' 2>/dev/null)"
+            if [ -n "$DYN_BIN" ]; then
+                BIN_CMD="$(basename "$DYN_BIN")"
+            else
+                APK_BIN="$(docker exec "$CONTAINER" sh -c "apk info -L '$APP_ID' 2>/dev/null | grep -E '^usr/bin/|^bin/' | head -n 1")"
+                if [ -n "$APK_BIN" ]; then
+                    BIN_CMD="$(basename "$APK_BIN")"
+                fi
+            fi
+        fi
+        ;;
+esac
+
+PULSE_SOCK="$XDG_RUNTIME_DIR/pulse/native"
+DBUS_SOCK="$XDG_RUNTIME_DIR/bus"
+
+# Strip desktop file placeholders (%U, %u, %F, %f) while preserving real arguments
+ARGS_FOUND=""
+for a in "$@"; do
+    case "$a" in
+        %[uUfF]) ;;
+        *)
+            if [ -z "$ARGS_FOUND" ]; then
+                set -- "$a"
+                ARGS_FOUND=1
+            else
+                set -- "$@" "$a"
+            fi
+            ;;
+    esac
+done
+if [ -z "$ARGS_FOUND" ]; then
+    set --
+fi
+
+USER_EXEC_ARG=""
+if [ "$UID_VAL" != "0" ]; then
+    if docker exec "$CONTAINER" id -u arkst-user >/dev/null 2>&1; then
+        USER_EXEC_ARG="--user arkst-user"
+    fi
+fi
+
+exec docker exec -d $USER_EXEC_ARG \
+    -e DISPLAY="$DISPLAY" \
+    -e WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    -e XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    -e HOME="/home/arkst-user" \
+    -e USER="arkst-user" \
+    -e LOGNAME="arkst-user" \
+    -e PULSE_SERVER="unix:$PULSE_SOCK" \
+    -e DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_SOCK" \
+    -e QT_X11_NO_MITSHM=1 \
+    -e _X11_NO_MITSHM=1 \
+    $PLATFORM_ARGS \
+    $SW_GL_ARG \
+    "$CONTAINER" $BIN_CMD $EXTRA_ARGS "$@"
+'''
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            script_path.write_text(script_content, encoding="utf-8")
+            script_path.chmod(0o755)
+        except Exception:
+            pass
+        return script_path
+
+    def _generate_shortcut_content(self, app_id: str, app_meta: Dict[str, Any]) -> str:
+        launcher_path = self._ensure_launcher_script()
+        cat_raw = app_meta.get("category", "Utility")
+        cat_map = {
+            "Social & Communication": "Network;Chat;InstantMessaging;",
+            "Graphics & Media": "Graphics;AudioVideo;",
+            "Internet & Network": "Network;WebBrowser;",
+            "Development": "Development;IDE;",
+            "Productivity": "Office;",
+            "Utility": "Utility;",
+        }
+        category = cat_map.get(cat_raw, f"{cat_raw.replace(' & ', ';').replace(' ', '')};")
+        if app_id in ("vlc", "mpv"):
+            category = "AudioVideo;Player;Recorder;"
+        icon = app_meta.get("icon", "application-x-executable")
+        if app_id in ("telegram", "telegram-desktop"):
+            icon = "org.telegram.desktop"
+        return f"""[Desktop Entry]
+Version=1.0
+Type=Application
+Name={app_meta['name']} (Docker)
+GenericName={app_meta.get('desc', '')}
+Comment=Sandboxed Docker container application ({self.CONTAINER_NAME})
+Exec={launcher_path} {app_id} %U
+Icon={icon}
+Terminal=false
+Categories={category}
+StartupNotify=true
+X-ArkST-Docker=true
+X-ArkST-AppId={app_id}
+"""
+
+    def repair_existing_shortcuts(self):
+        """Upgrade any existing arkst-box-*.desktop shortcuts to use the self-healing arkst-box-launch helper."""
+        try:
+            launcher_path = self._ensure_launcher_script()
+            if not self.SHORTCUTS_DIR.exists():
+                return
+            updated_any = False
+            for dt_file in self.SHORTCUTS_DIR.glob("arkst-box-*.desktop"):
+                app_id = dt_file.stem[len("arkst-box-"):]
+                if not app_id:
+                    continue
+                try:
+                    txt = dt_file.read_text(encoding="utf-8", errors="ignore")
+                    meta = self._resolve_app_meta(app_id)
+                    expected = self._generate_shortcut_content(app_id, meta)
+                    if txt.strip() != expected.strip():
+                        dt_file.write_text(expected, encoding="utf-8")
+                        dt_file.chmod(0o755)
+                        updated_any = True
+                except Exception:
+                    pass
+            if updated_any:
+                subprocess.run(["update-desktop-database", str(self.SHORTCUTS_DIR)], capture_output=True, timeout=3)
+        except Exception:
+            pass
 
     def is_app_installing(self, app_id: str) -> bool:
         return app_id in self.active_container_installs
@@ -6819,13 +8922,25 @@ class ContainerManager:
         user_sock = Path(f"/run/user/{os.getuid()}/docker.sock")
         if has_docker and (docker_sock.exists() or user_sock.exists()):
             try:
-                proc = subprocess.run(["docker", "info"], capture_output=True, timeout=4)
+                proc = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=4)
                 if proc.returncode == 0:
                     daemon_running = True
+                elif "permission denied" in (proc.stderr or "").lower():
+                    subprocess.run(["sudo", "-n", "chmod", "666", "/var/run/docker.sock"], capture_output=True, timeout=3)
+                    proc2 = subprocess.run(["docker", "info"], capture_output=True, timeout=4)
+                    if proc2.returncode == 0:
+                        daemon_running = True
             except Exception:
                 pass
-        
+
         if daemon_running:
+            # Always ensure legacy aura-box / ark-box containers are purged when Docker is active
+            if not getattr(self, "_legacy_containers_purged", False):
+                self._legacy_containers_purged = True
+                try:
+                    self.migrate_legacy_containers()
+                except Exception:
+                    pass
             try:
                 proc = subprocess.run(
                     ["docker", "inspect", "-f", "{{.State.Running}}", self.CONTAINER_NAME],
@@ -6873,22 +8988,60 @@ class ContainerManager:
                 completion_callback(res.returncode == 0, "Container stopped." if res.returncode == 0 else res.stderr)
         threading.Thread(target=_task, daemon=True).start()
 
-    def remove_container(self, purge_shortcuts: bool = True, completion_callback=None):
-        """Remove aura-box container and purge host desktop shortcuts."""
-        def _task():
-            subprocess.run(["docker", "rm", "-f", self.CONTAINER_NAME], capture_output=True, timeout=15)
-            if purge_shortcuts:
-                for shortcut in self.SHORTCUTS_DIR.glob(f"{self.CONTAINER_NAME}-*.desktop"):
+    def migrate_legacy_containers(self) -> List[str]:
+        """Automatically remove any legacy aura-box / ark-box containers & shortcuts across docker/podman/distrobox."""
+        migrated_apps: List[str] = []
+        try:
+            if self.SHORTCUTS_DIR.exists():
+                for pat in ("aura-box-*.desktop", "ark-box-*.desktop"):
+                    for desktop_file in self.SHORTCUTS_DIR.glob(pat):
+                        prefix = pat.split("*")[0]
+                        app_id = desktop_file.stem[len(prefix):]
+                        if app_id and app_id not in migrated_apps:
+                            migrated_apps.append(app_id)
+                        try:
+                            desktop_file.unlink()
+                        except Exception:
+                            pass
+                # Also scan any .desktop file in SHORTCUTS_DIR that references aura-box inside Exec=
+                for desktop_file in self.SHORTCUTS_DIR.glob("*.desktop"):
                     try:
-                        shortcut.unlink()
+                        txt = desktop_file.read_text(encoding="utf-8", errors="ignore")
+                        if "aura-box" in txt or "ark-box" in txt or "X-Aura-Docker" in txt:
+                            desktop_file.unlink(missing_ok=True)
                     except Exception:
                         pass
+            if shutil.which("docker"):
+                for legacy_name in ("aura-box", "ark-box", "aura-sandbox"):
+                    subprocess.run(["docker", "rm", "-f", legacy_name], capture_output=True, timeout=8)
+            if shutil.which("podman"):
+                for legacy_name in ("aura-box", "ark-box", "aura-sandbox"):
+                    subprocess.run(["podman", "rm", "-f", legacy_name], capture_output=True, timeout=8)
+            if shutil.which("distrobox"):
+                for legacy_name in ("aura-box", "ark-box"):
+                    subprocess.run(["distrobox", "rm", "-f", legacy_name], capture_output=True, timeout=8)
+        except Exception:
+            pass
+        return migrated_apps
+
+    def remove_container(self, purge_shortcuts: bool = True, completion_callback=None):
+        """Remove arkst-box container and purge host desktop shortcuts."""
+        def _task():
+            subprocess.run(["docker", "rm", "-f", self.CONTAINER_NAME, "aura-box", "ark-box"], capture_output=True, timeout=15)
+            if purge_shortcuts:
+                for pat in (f"{self.CONTAINER_NAME}-*.desktop", "aura-box-*.desktop", "ark-box-*.desktop"):
+                    for shortcut in self.SHORTCUTS_DIR.glob(pat):
+                        try:
+                            shortcut.unlink()
+                        except Exception:
+                            pass
                 try:
                     subprocess.run(["update-desktop-database", str(self.SHORTCUTS_DIR)], capture_output=True, timeout=5)
                 except Exception:
                     pass
+            self.invalidate_cache()
             if completion_callback:
-                completion_callback(True, "Aura Box sandbox and desktop shortcuts removed.")
+                completion_callback(True, "ArkST Box sandbox and desktop shortcuts removed.")
         threading.Thread(target=_task, daemon=True).start()
 
     def disable_docker_system_service(self, remove_from_group: bool = False, completion_callback=None):
@@ -6981,6 +9134,7 @@ class ContainerManager:
                 self.configuring_progress_text = "Initializing Docker environment..."
 
             try:
+                migrated_apps = self.migrate_legacy_containers()
                 status = self.get_status(force_refresh=True)
                 if status["status_code"] == "ready":
                     return True, "Container already configured and active."
@@ -6989,77 +9143,121 @@ class ContainerManager:
                     if status.get("has_docker") and shutil.which("systemctl"):
                         _report("Starting Docker background daemon (docker.service)...")
                         env = os.environ.copy()
-                        if ASKPASS_SCRIPT.exists():
-                            env["SUDO_ASKPASS"] = str(ASKPASS_SCRIPT)
-                        r = subprocess.run(["sudo", "-n", "systemctl", "start", "docker.service"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
+                        askpass = get_askpass_script()
+                        if askpass.exists():
+                            env["SUDO_ASKPASS"] = str(askpass)
+                        boot_cmd = "systemctl enable --now docker.service 2>/dev/null || systemctl start docker.service; chmod 666 /var/run/docker.sock 2>/dev/null || true; docker rm -f aura-box ark-box 2>/dev/null || true"
+                        r = subprocess.run(["sudo", "-n", "sh", "-c", boot_cmd], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=15)
                         if r.returncode != 0:
-                            subprocess.run(["sudo", "-A", "systemctl", "start", "docker.service"], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=30)
-                        time.sleep(1.2)
+                            subprocess.run(["sudo", "-A", "sh", "-c", boot_cmd], stdin=subprocess.DEVNULL, capture_output=True, env=env, timeout=45)
+                        time.sleep(1.0)
+                        self.migrate_legacy_containers()
                         status = self.get_status(force_refresh=True)
 
                     if status["status_code"] == "missing_engine":
                         return False, "Docker is not installed or daemon is not running."
+
+                self._ensure_launcher_script()
+                self.repair_existing_shortcuts()
+                if shutil.which("xhost"):
+                    try:
+                        subprocess.run(["xhost", "+local:"], capture_output=True, timeout=2)
+                    except Exception:
+                        pass
 
                 if status["status_code"] == "stopped":
                     _report(f"Starting existing '{self.CONTAINER_NAME}' container...")
                     proc = subprocess.run(["docker", "start", self.CONTAINER_NAME], capture_output=True, text=True, timeout=10)
                     if proc.returncode == 0:
                         subprocess.run(["docker", "update", "--restart", "unless-stopped", self.CONTAINER_NAME], capture_output=True, timeout=5)
-                        _report("Verifying baseline GUI libraries (mesa, x11, fonts)...")
-                        self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], timeout=90)
+                        _report("Verifying baseline GUI and GPU libraries (mesa, vulkan, x11, wayland, fonts, dbus)...")
+                        self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-egl", "mesa-gles", "mesa-va-gallium", "mesa-vulkan-ati", "mesa-vulkan-intel", "intel-media-driver", "libx11", "libxext", "libxrender", "libxkbcommon", "qt5-qtwayland", "dbus-x11", "font-noto", "adwaita-icon-theme"], timeout=90)
                         self.invalidate_cache()
-                        return True, "Started existing aura-box container."
+                        return True, "Started existing arkst-box container."
                     return False, f"Failed to start container: {proc.stderr}"
 
                 _report(f"Initializing '{self.CONTAINER_NAME}' container environment (Alpine Linux)...")
 
+                env_gui = get_gui_launch_env()
                 uid = os.getuid()
-                runtime_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-                display = os.environ.get("DISPLAY", ":0")
-                wayland = os.environ.get("WAYLAND_DISPLAY", "wayland-1")
+                runtime_dir = env_gui.get("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+                display = env_gui.get("DISPLAY", ":0")
+                wayland = env_gui.get("WAYLAND_DISPLAY", "wayland-1")
 
-                app_data_dir = Path.home() / ".local" / "share" / "aura" / "containers"
+                app_data_dir = Path.home() / ".local" / "share" / "arkst" / "containers"
                 app_data_dir.mkdir(parents=True, exist_ok=True)
+
+                # Ensure no stale container with same name blocks creation
+                subprocess.run(["docker", "rm", "-f", self.CONTAINER_NAME, "aura-box", "ark-box"], capture_output=True, timeout=10)
 
                 cmd = [
                     "docker", "run", "-d",
                     "--name", self.CONTAINER_NAME,
                     "--restart", "unless-stopped",
-                    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-                    "-v", f"{app_data_dir}:/home/aura-user/app-data",
+                    "--shm-size=2g",
+                    "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+                    "-v", f"{app_data_dir}:/home/arkst-user/app-data",
                     "-e", f"DISPLAY={display}",
                     "-e", f"WAYLAND_DISPLAY={wayland}",
                     "-e", f"XDG_RUNTIME_DIR={runtime_dir}",
-                    "-e", "HOME=/home/aura-user",
+                    "-e", "HOME=/home/arkst-user",
+                    "-e", "QT_X11_NO_MITSHM=1",
+                    "-e", "_X11_NO_MITSHM=1",
+                    "-e", "QT_QPA_PLATFORM=wayland;xcb",
+                    "-e", "GDK_BACKEND=wayland,x11",
+                    "-e", "MOZ_ENABLE_WAYLAND=1",
                 ]
 
-                wayland_sock = Path(runtime_dir) / wayland
-                if wayland_sock.exists():
-                    cmd.extend(["-v", f"{wayland_sock}:{wayland_sock}"])
+                # Mount entire XDG_RUNTIME_DIR (/run/user/<uid>) so Wayland, PipeWire, PulseAudio, and D-Bus sockets stay connected
+                if Path(runtime_dir).exists():
+                    cmd.extend(["-v", f"{runtime_dir}:{runtime_dir}"])
+                else:
+                    wayland_sock = Path(runtime_dir) / wayland
+                    if wayland_sock.exists():
+                        cmd.extend(["-v", f"{wayland_sock}:{wayland_sock}"])
+                    pulse_sock = Path(runtime_dir) / "pulse" / "native"
+                    if pulse_sock.exists():
+                        cmd.extend(["-v", f"{pulse_sock}:{pulse_sock}"])
+                    pipewire_sock = Path(runtime_dir) / "pipewire-0"
+                    if pipewire_sock.exists():
+                        cmd.extend(["-v", f"{pipewire_sock}:{pipewire_sock}"])
 
                 pulse_sock = Path(runtime_dir) / "pulse" / "native"
-                if pulse_sock.exists():
-                    cmd.extend(["-v", f"{pulse_sock}:{pulse_sock}", "-e", f"PULSE_SERVER=unix:{pulse_sock}"])
-                pipewire_sock = Path(runtime_dir) / "pipewire-0"
-                if pipewire_sock.exists():
-                    cmd.extend(["-v", f"{pipewire_sock}:{pipewire_sock}"])
+                cmd.extend(["-e", f"PULSE_SERVER=unix:{pulse_sock}"])
 
                 if Path("/dev/dri").exists():
                     cmd.extend(["--device", "/dev/dri:/dev/dri"])
+                if Path("/dev/snd").exists():
+                    cmd.extend(["--device", "/dev/snd:/dev/snd"])
 
                 cmd.extend([
                     "alpine:latest",
                     "tail", "-f", "/dev/null"
                 ])
 
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
                 if proc.returncode != 0:
                     return False, f"Failed to create container: {proc.stderr}"
 
-                _report("Installing baseline GUI libraries (mesa, x11, fonts)...")
-                apk_proc = self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-dri-gallium", "mesa-egl", "libx11", "font-noto"], timeout=90)
-                if apk_proc.returncode != 0:
-                    return False, f"Failed installing baseline GUI libraries: {apk_proc.stderr or apk_proc.stdout}"
+                # Ensure container user matching host UID exists
+                subprocess.run([
+                    "docker", "exec", self.CONTAINER_NAME, "sh", "-c",
+                    f"id -u arkst-user >/dev/null 2>&1 || (adduser -D -u {uid} -s /bin/sh arkst-user 2>/dev/null; addgroup arkst-user video 2>/dev/null; addgroup arkst-user audio 2>/dev/null; chown -R {uid}:{uid} /home/arkst-user 2>/dev/null); mkdir -p /home/arkst-user '{runtime_dir}'; chown -R {uid}:{uid} /home/arkst-user 2>/dev/null"
+                ], capture_output=True, timeout=15)
+
+                _report("Installing baseline GUI and GPU libraries (mesa, vulkan, vaapi, x11, wayland, fonts, dbus)...")
+                res_base = self._run_apk([
+                    "add", "--no-cache",
+                    "mesa-gl", "mesa-egl", "mesa-gles", "mesa-va-gallium",
+                    "mesa-vulkan-ati", "mesa-vulkan-intel", "intel-media-driver",
+                    "libx11", "libxext", "libxrender",
+                    "libxi", "libxfixes", "libxcursor", "libxrandr", "libxkbcommon",
+                    "wayland-libs-client", "wayland-libs-egl", "qt5-qtwayland",
+                    "dbus-x11", "font-noto", "ttf-dejavu", "adwaita-icon-theme",
+                    "pulseaudio-utils", "alsa-plugins-pulse"
+                ], timeout=120)
+                if res_base.returncode != 0:
+                    self._run_apk(["add", "--no-cache", "mesa-gl", "mesa-egl", "libx11", "font-noto"], timeout=90)
                 self.invalidate_cache()
 
                 _report("Container environment configured successfully!")
@@ -7087,7 +9285,7 @@ class ContainerManager:
                 if not match:
                     continue
 
-            shortcut = self.SHORTCUTS_DIR / f"aura-box-{app['id']}.desktop"
+            shortcut = self.SHORTCUTS_DIR / f"arkst-box-{app['id']}.desktop"
             item = dict(app)
             item["is_installed"] = shortcut.exists()
             item["shortcut_path"] = str(shortcut)
@@ -7097,8 +9295,8 @@ class ContainerManager:
 
         # 2. Detect installed container apps from desktop shortcuts (not in curated list)
         try:
-            for desktop_file in self.SHORTCUTS_DIR.glob("aura-box-*.desktop"):
-                app_id = desktop_file.stem.replace("aura-box-", "", 1)
+            for desktop_file in self.SHORTCUTS_DIR.glob("arkst-box-*.desktop"):
+                app_id = desktop_file.stem.replace("arkst-box-", "", 1)
                 if app_id in seen_ids:
                     continue
                 if q and q not in app_id.lower():
@@ -7155,7 +9353,7 @@ class ContainerManager:
                 if app["id"] in seen_ids:
                     continue
                 if q in app["id"].lower() or q in app["name"].lower() or q in app["desc"].lower() or q in app["category"].lower():
-                    shortcut = self.SHORTCUTS_DIR / f"aura-box-{app['id']}.desktop"
+                    shortcut = self.SHORTCUTS_DIR / f"arkst-box-{app['id']}.desktop"
                     item = dict(app)
                     item["is_installed"] = shortcut.exists()
                     item["shortcut_path"] = str(shortcut)
@@ -7180,7 +9378,7 @@ class ContainerManager:
                                 continue
                             if pkg_name in seen_ids:
                                 continue
-                            shortcut = self.SHORTCUTS_DIR / f"aura-box-{pkg_name}.desktop"
+                            shortcut = self.SHORTCUTS_DIR / f"arkst-box-{pkg_name}.desktop"
                             results.append({
                                 "id": pkg_name,
                                 "name": get_app_display_name(pkg_name),
@@ -7202,7 +9400,7 @@ class ContainerManager:
         return results
 
     def is_app_installed(self, app_id: str) -> bool:
-        shortcut = self.SHORTCUTS_DIR / f"aura-box-{app_id}.desktop"
+        shortcut = self.SHORTCUTS_DIR / f"arkst-box-{app_id}.desktop"
         return shortcut.exists()
 
     def install_app(self, app_id: str, progress_callback: Optional[Callable[[str], None]] = None, completion_callback: Optional[Callable[[bool, str], None]] = None):
@@ -7221,17 +9419,7 @@ class ContainerManager:
                     orig_prog(msg)
             progress_callback = _tracked_prog
             try:
-                app_meta = next((a for a in self.CURATED_CONTAINER_APPS if a["id"] == app_id), None)
-                if not app_meta:
-                    app_meta = {
-                        "id": app_id,
-                        "name": app_id.capitalize(),
-                        "desc": f"Container application ({app_id})",
-                        "category": "Utility",
-                        "icon": "application-x-executable",
-                        "binary": app_id,
-                        "pkg": app_id,
-                    }
+                app_meta = self._resolve_app_meta(app_id)
 
                 # 1. Ensure container is ready
                 ok, msg = self.ensure_container_configured(progress_callback)
@@ -7240,47 +9428,49 @@ class ContainerManager:
                         completion_callback(False, f"Container setup failed: {msg}")
                     return
 
-                # 2. Install inside container using lock-safe _run_apk helper
+                # 2. Install inside container using lock-safe _run_apk helper (including GUI subpackages like vlc-qt)
                 if progress_callback:
                     progress_callback(f"Installing {app_meta['name']} inside '{self.CONTAINER_NAME}'...")
 
                 pkg = app_meta.get("pkg", app_id)
+                pkg_list = [p for p in pkg.split() if p]
+                extra_pkgs = list(app_meta.get("extra_pkgs", []))
                 try:
-                    proc = self._run_apk(["add", "--no-cache", pkg], timeout=300)
+                    proc = self._run_apk(["add", "--no-cache"] + pkg_list + extra_pkgs, timeout=300)
+                    if proc.returncode != 0 and extra_pkgs:
+                        # Retry core package + essential GUI packages individually if an optional subpackage name differed
+                        proc = self._run_apk(["add", "--no-cache"] + pkg_list, timeout=300)
+                        for ep in extra_pkgs:
+                            self._run_apk(["add", "--no-cache", ep], timeout=60)
                     if proc.returncode != 0:
                         err_clean = (proc.stderr or proc.stdout or f"apk exited with {proc.returncode}").strip().replace("\n", " ")
                         if completion_callback:
                             completion_callback(False, f"Installation failed: {err_clean}")
                         return
+
+                    # Post-install hook (e.g. symlinks or custom config)
+                    post_cmd = app_meta.get("post_install_cmd")
+                    if post_cmd:
+                        subprocess.run(["docker", "exec", self.CONTAINER_NAME, "sh", "-c", post_cmd], capture_output=True, timeout=15)
+                    elif app_id.lower() == "vlc" or "vlc" in pkg_list:
+                        # Clean up any legacy getppid corruption from previous versions
+                        subprocess.run(["docker", "exec", self.CONTAINER_NAME, "sh", "-c", "if strings /usr/bin/vlc 2>/dev/null | grep -q getppid; then apk fix --force vlc; fi"], capture_output=True, timeout=30)
                 except Exception as e:
                     if completion_callback:
                         completion_callback(False, f"Installation error: {e}")
                     return
 
-                # 3. Auto-create desktop shortcut
+                # 3. Auto-create desktop shortcut wired to self-healing arkst-box-launch script
                 if progress_callback:
                     progress_callback("Generating host desktop shortcut...")
 
-                shortcut_path = self.SHORTCUTS_DIR / f"aura-box-{app_id}.desktop"
-                shortcut_content = f"""[Desktop Entry]
-Version=1.0
-Type=Application
-Name={app_meta['name']} (Docker)
-GenericName={app_meta.get('desc', '')}
-Comment=Sandboxed Docker container application
-Exec=sh -c 'docker exec -d -e DISPLAY=\"$DISPLAY\" -e WAYLAND_DISPLAY=\"$WAYLAND_DISPLAY\" -e XDG_RUNTIME_DIR=\"$XDG_RUNTIME_DIR\" {self.CONTAINER_NAME} {app_meta["binary"]} %U'
-Icon={app_meta.get('icon', 'application-x-executable')}
-Terminal=false
-Categories={app_meta.get('category', 'Utility')};
-StartupNotify=true
-X-Aura-Docker=true
-X-Aura-AppId={app_id}
-"""
+                shortcut_path = self.SHORTCUTS_DIR / f"arkst-box-{app_id}.desktop"
+                shortcut_content = self._generate_shortcut_content(app_id, app_meta)
                 try:
-                    shortcut_path.write_text(shortcut_content)
+                    shortcut_path.write_text(shortcut_content, encoding="utf-8")
                     shortcut_path.chmod(0o755)
-                    # Update desktop database
                     subprocess.run(["update-desktop-database", str(self.SHORTCUTS_DIR)], capture_output=True, timeout=3)
+                    self.invalidate_cache()
                 except Exception as e:
                     if completion_callback:
                         completion_callback(False, f"Failed creating shortcut: {e}")
@@ -7301,7 +9491,7 @@ X-Aura-AppId={app_id}
     def uninstall_app(self, app_id: str, progress_callback: Optional[Callable[[str], None]] = None, completion_callback: Optional[Callable[[bool, str], None]] = None):
         """Remove package from container first and verify success before purging shortcut."""
         def _task():
-            app_meta = next((a for a in self.CURATED_CONTAINER_APPS if a["id"] == app_id), None)
+            app_meta = self._resolve_app_meta(app_id)
             name = app_meta["name"] if app_meta else app_id
 
             if progress_callback:
@@ -7318,47 +9508,101 @@ X-Aura-AppId={app_id}
                     return
 
             # 2. Delete desktop shortcut only after successful removal
-            shortcut_path = self.SHORTCUTS_DIR / f"aura-box-{app_id}.desktop"
+            shortcut_path = self.SHORTCUTS_DIR / f"arkst-box-{app_id}.desktop"
             if shortcut_path.exists():
                 try:
                     shortcut_path.unlink()
                     subprocess.run(["update-desktop-database", str(self.SHORTCUTS_DIR)], capture_output=True, timeout=3)
                 except Exception:
                     pass
+            self.invalidate_cache()
 
             if completion_callback:
                 completion_callback(True, f"Removed {name} and cleaned up desktop shortcut.")
 
         threading.Thread(target=_task, daemon=True).start()
 
-    def launch_app(self, app_id: str):
-        """Launch container app or its desktop shortcut, ensuring container is running."""
+    def launch_app(self, app_id: str) -> bool:
+        """Launch container app via self-healing arkst-box-launch helper, repairing shortcuts and VLC GUI automatically."""
+        clean_id = (app_id or "").strip()
+        if clean_id.lower().startswith("arkst-box-"):
+            clean_id = clean_id[len("arkst-box-"):]
+        if not clean_id:
+            return False
+
+        launcher_path = self._ensure_launcher_script()
+        self.repair_existing_shortcuts()
+        env = get_gui_launch_env()
+
+        if shutil.which("xhost"):
+            try:
+                subprocess.run(["xhost", "+local:"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            except Exception:
+                pass
+
+        if launcher_path.exists():
+            try:
+                subprocess.Popen([str(launcher_path), clean_id], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except Exception:
+                pass
+
+        # Direct fallback if launcher script couldn't be executed
         status = self.get_status()
         if not status["container_running"] and status["container_exists"]:
             subprocess.run(["docker", "start", self.CONTAINER_NAME], capture_output=True, timeout=10)
 
-        shortcut_name = f"aura-box-{app_id}.desktop"
+        app_meta = self._resolve_app_meta(clean_id)
+        binary = app_meta.get("binary", clean_id)
+        launch_args = [a for a in app_meta.get("launch_args", "").split() if a]
+        if clean_id.lower() == "vlc" or binary == "vlc":
+            subprocess.run(
+                ["docker", "exec", self.CONTAINER_NAME, "sh", "-c",
+                 "if strings /usr/bin/vlc 2>/dev/null | grep -q getppid; then apk fix --force vlc; fi; apk info -e vlc-qt >/dev/null 2>&1 || apk --wait 30 add --no-cache vlc-qt vlc-xorg qt5-qtwayland dbus-x11 font-noto adwaita-icon-theme"],
+                capture_output=True, timeout=30
+            )
+        display = env.get("DISPLAY", ":0")
+        wayland = env.get("WAYLAND_DISPLAY", "wayland-1")
+        runtime_dir = env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
         try:
-            subprocess.Popen(["gtk-launch", shortcut_name])
-            return
+            subprocess.Popen([
+                "docker", "exec", "-d",
+                "--user", "arkst-user",
+                "-e", f"DISPLAY={display}",
+                "-e", f"WAYLAND_DISPLAY={wayland}",
+                "-e", f"XDG_RUNTIME_DIR={runtime_dir}",
+                "-e", f"PULSE_SERVER=unix:{runtime_dir}/pulse/native",
+                "-e", f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_dir}/bus",
+                "-e", "QT_X11_NO_MITSHM=1",
+                "-e", "_X11_NO_MITSHM=1",
+                "-e", "QT_QPA_PLATFORM=xcb;wayland",
+                "-e", "GDK_BACKEND=x11,wayland",
+                "-e", "LIBGL_ALWAYS_SOFTWARE=1",
+                self.CONTAINER_NAME, binary
+            ] + launch_args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
         except Exception:
-            pass
-
-        app_meta = next((a for a in self.CURATED_CONTAINER_APPS if a["id"] == app_id), None)
-        binary = app_meta["binary"] if app_meta else app_id
-        display = os.environ.get("DISPLAY", ":0")
-        wayland = os.environ.get("WAYLAND_DISPLAY", "wayland-1")
-        subprocess.Popen(["docker", "exec", "-d", "-e", f"DISPLAY={display}", "-e", f"WAYLAND_DISPLAY={wayland}", self.CONTAINER_NAME, binary])
+            return False
 
     def check_container_updates(self) -> List[Dict[str, Any]]:
         """Check for updates available for container-installed applications or base image."""
         updates: List[Dict[str, Any]] = []
+        if getattr(self, "active_container_installs", None) or getattr(self, "is_configuring", False):
+            # Skip checking container updates while an active container install or setup is running
+            return updates
+
         status = self.get_status()
         if not status.get("daemon_running") or not status.get("container_running"):
             return updates
 
+        apk_lock = getattr(self, "_apk_lock", None)
+        if apk_lock is not None and not apk_lock.acquire(blocking=False):
+            # Container package manager is currently busy; skip to avoid stalling host update checks
+            return updates
+
         try:
-            proc = self._run_apk(["version", "-l", "<"], timeout=15)
+            cmd = ["docker", "exec", self.CONTAINER_NAME, "apk", "version", "-l", "<"]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0:
                 for line in proc.stdout.splitlines():
                     line = line.strip()
@@ -7386,6 +9630,12 @@ X-Aura-AppId={app_id}
                         })
         except Exception:
             pass
+        finally:
+            if apk_lock is not None:
+                try:
+                    apk_lock.release()
+                except Exception:
+                    pass
 
         return updates
 
@@ -7413,9 +9663,14 @@ X-Aura-AppId={app_id}
                         completion_callback(False, f"Container setup failed: {msg}")
                     return
 
-                # 2. Upgrade inside container
-                name = app_meta.get("name", app_id)
-                pkg = app_meta.get("pkg", app_id)
+                # 2. Upgrade inside container (strip version suffix if app_id came from check_container_updates)
+                m_ver = re.match(r'^([a-zA-Z0-9_+-]+?)-[0-9][^-]*-r[0-9]+$', app_id)
+                clean_pkg_id = m_ver.group(1) if m_ver else app_id
+                curated_match = next((a for a in self.CURATED_CONTAINER_APPS if a["id"] in (app_id, clean_pkg_id)), None)
+                if curated_match:
+                    app_meta = curated_match
+                name = app_meta.get("name", clean_pkg_id)
+                pkg = curated_match.get("pkg", clean_pkg_id) if curated_match else clean_pkg_id
                 if progress_callback:
                     progress_callback(f"Updating {name} in '{self.CONTAINER_NAME}'...")
 
@@ -7430,29 +9685,27 @@ X-Aura-AppId={app_id}
                         completion_callback(False, f"Update error: {e}")
                     return
 
-                # 3. Re-generate desktop shortcut
+                # 3. Re-generate desktop shortcut only if this is a curated GUI app or already has a shortcut
+                shortcut_path = self.SHORTCUTS_DIR / f"arkst-box-{clean_pkg_id}.desktop"
+                if not curated_match and not shortcut_path.exists():
+                    if progress_callback:
+                        progress_callback(f"Successfully updated {name}!")
+                    if completion_callback:
+                        completion_callback(True, f"Updated container package {name}.")
+                    return
+
+                if clean_pkg_id.lower() == "vlc" or pkg == "vlc":
+                    self._run_apk(["add", "--upgrade", "--no-cache", "vlc-qt", "vlc-xorg", "qt5-qtwayland", "dbus-x11"], timeout=120)
+                    subprocess.run(["docker", "exec", self.CONTAINER_NAME, "sh", "-c", "if strings /usr/bin/vlc 2>/dev/null | grep -q getppid; then apk fix --force vlc; fi"], capture_output=True, timeout=30)
+
                 if progress_callback:
                     progress_callback("Re-generating host desktop shortcut...")
-
-                shortcut_path = self.SHORTCUTS_DIR / f"aura-box-{app_id}.desktop"
-                shortcut_content = f"""[Desktop Entry]
-Version=1.0
-Type=Application
-Name={app_meta['name']} (Docker)
-GenericName={app_meta.get('desc', '')}
-Comment=Sandboxed Docker container application
-Exec=sh -c 'docker exec -d -e DISPLAY=\"$DISPLAY\" -e WAYLAND_DISPLAY=\"$WAYLAND_DISPLAY\" -e XDG_RUNTIME_DIR=\"$XDG_RUNTIME_DIR\" {self.CONTAINER_NAME} {app_meta["binary"]} %U'
-Icon={app_meta.get('icon', 'application-x-executable')}
-Terminal=false
-Categories={app_meta.get('category', 'Utility')};
-StartupNotify=true
-X-Aura-Docker=true
-X-Aura-AppId={app_id}
-"""
+                shortcut_content = self._generate_shortcut_content(clean_pkg_id, app_meta)
                 try:
-                    shortcut_path.write_text(shortcut_content)
+                    shortcut_path.write_text(shortcut_content, encoding="utf-8")
                     shortcut_path.chmod(0o755)
                     subprocess.run(["update-desktop-database", str(self.SHORTCUTS_DIR)], capture_output=True, timeout=3)
+                    self.invalidate_cache()
                 except Exception as e:
                     if completion_callback:
                         completion_callback(False, f"Failed updating shortcut: {e}")
@@ -7482,7 +9735,9 @@ class CacheManager:
     PACMAN_CACHE_DIR = Path("/var/cache/pacman/pkg")
     PARU_CACHE_DIR = Path.home() / ".cache" / "paru" / "clone"
     YAY_CACHE_DIR = Path.home() / ".cache" / "yay"
-    AURA_CACHE_DIR = Path.home() / ".cache" / "aura"
+    ARKST_CACHE_DIR = Path.home() / ".cache" / "arkst"
+    AURA_CACHE_DIR = ARKST_CACHE_DIR
+    LEGACY_AURA_CACHE_DIR = Path.home() / ".cache" / "aura"
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -7541,7 +9796,7 @@ class CacheManager:
         yay_size = self._dir_size(self.YAY_CACHE_DIR)
         aur_total = paru_size + yay_size
 
-        aura_total = self._dir_size(self.AURA_CACHE_DIR)
+        aura_total = self._dir_size(self.ARKST_CACHE_DIR) + self._dir_size(self.LEGACY_AURA_CACHE_DIR)
 
         docker_reclaimable = 0
         if shutil.which("docker"):
@@ -7637,13 +9892,13 @@ class CacheManager:
                     "icon": "text-x-generic-symbolic",
                     "color": "#bf5af2",
                 },
-                "aura": {
-                    "name": "Aura Application Cache",
+                "arkst": {
+                    "name": "ArkST Application Cache",
                     "total_bytes": aura_total,
                     "reclaimable_bytes": aura_total,
                     "total_str": self.format_size(aura_total),
                     "reclaimable_str": self.format_size(aura_total),
-                    "desc": "Aura database sync cache and cached vector application icons.",
+                    "desc": "ArkST database sync cache and cached vector application icons.",
                     "requires_root": False,
                     "icon": "preferences-system-symbolic",
                     "color": "#64d2ff",
@@ -7744,16 +9999,18 @@ class CacheManager:
                             res = subprocess.run(["sudo", "-A", "journalctl", "--vacuum-time=7d"], stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60)
                         success = (res.returncode == 0)
                         msg = "Systemd journals vacuumed to last 7 days." if success else (res.stderr or "Journal vacuum failed")
-                    elif category == "aura":
+                    elif category in ("arkst", "aura"):
                         if progress_cb:
-                            progress_cb(0.3, "Purging Aura sync index cache...")
+                            progress_cb(0.3, "Purging ArkST sync index cache...")
                         for p in (CACHE_FILE, UPDATES_CACHE_FILE):
                             try:
                                 if p.exists():
                                     p.unlink()
                             except Exception:
                                 pass
-                        msg = "Aura local database cache cleared."
+                        if self.LEGACY_AURA_CACHE_DIR.exists():
+                            shutil.rmtree(self.LEGACY_AURA_CACHE_DIR, ignore_errors=True)
+                        msg = "ArkST local database cache cleared."
                     else:
                         success = False
                         msg = f"Unknown cache category: {category}"
@@ -8373,7 +10630,7 @@ class DebPackageManager:
             "extended_desc": long_desc,
             "url": control_fields.get("homepage", ""),
             "maintainer": sanitize_str(control_fields.get("maintainer", "Debian Package Maintainer")),
-            "packager": sanitize_str(control_fields.get("maintainer", "Aura Deb Bridge")),
+            "packager": sanitize_str(control_fields.get("maintainer", "ArkST Deb Bridge")),
             "license": control_fields.get("license", "Proprietary / Debian Package"),
             "section": control_fields.get("section", "utils"),
             "csize": csize_bytes,
@@ -8480,7 +10737,7 @@ class DebPackageManager:
             with self.pm._lock:
                 for p_name, p_data in self.pm.packages.items():
                     if p_name not in seen and p_name in self.pm.installed_set:
-                        if "Aura Deb Bridge" in str(p_data.get("packager", "")):
+                        if "ArkST Deb Bridge" in str(p_data.get("packager", "")) or "Aura Deb Bridge" in str(p_data.get("packager", "")):
                             results.append({
                                 "name": p_name,
                                 "display_name": get_app_display_name(p_name),
@@ -8576,6 +10833,15 @@ class DebPackageManager:
                         if (m.issym() or m.islnk()) and (".." in (m.linkname or "").split("/")):
                             continue
                         dtar.extract(m, path=pkgroot, set_attrs=False)
+                        if m.isfile() and not m.issym() and not m.islnk():
+                            try:
+                                is_exec_dir = any(m.name.startswith(p) for p in ("bin/", "sbin/", "usr/bin/", "usr/sbin/", "usr/libexec/", "opt/"))
+                                if (m.mode & 0o111) or is_exec_dir:
+                                    dest_candidate.chmod(0o755)
+                                else:
+                                    dest_candidate.chmod(0o644)
+                            except Exception:
+                                pass
                 extracted = True
                 break
 
@@ -8618,23 +10884,43 @@ class DebPackageManager:
         usr_bin = pkgroot / "usr" / "bin"
         apps_dir = pkgroot / "usr" / "share" / "applications"
 
-        # 3. Hyprland / Wayland Electron Auto-Optimization on .desktop launchers
+        # 3. Hyprland / Wayland Electron Auto-Optimization & /opt Binary Symlinking on .desktop launchers
         if apps_dir.exists():
             for dt_file in apps_dir.glob("*.desktop"):
                 try:
+                    if not deb_info.get("desktop_entry"):
+                        deb_info["desktop_entry"] = dt_file.stem
                     lines = dt_file.read_text(encoding="utf-8", errors="replace").splitlines()
                     new_lines = []
                     for line in lines:
-                        if line.startswith("Exec=") and wayland_fix and deb_info.get("is_electron"):
+                        if line.startswith("Exec="):
                             exec_val = line[5:].strip()
-                            if "--ozone-platform" not in exec_val:
-                                # Inject --ozone-platform-hint=auto before %U/%F or at the end
-                                if " %" in exec_val:
-                                    idx = exec_val.find(" %")
-                                    exec_val = exec_val[:idx] + " --ozone-platform-hint=auto" + exec_val[idx:]
-                                else:
-                                    exec_val = exec_val + " --ozone-platform-hint=auto"
-                                line = f"Exec={exec_val}"
+                            raw_bin = _extract_exec_binary(exec_val)
+                            if raw_bin.startswith("/opt/"):
+                                rel_opt = raw_bin.lstrip("/")
+                                opt_target = pkgroot / rel_opt
+                                if opt_target.exists() and not opt_target.is_symlink():
+                                    try:
+                                        opt_target.chmod(0o755)
+                                    except Exception:
+                                        pass
+                                bin_short = os.path.basename(raw_bin)
+                                usr_bin.mkdir(parents=True, exist_ok=True)
+                                sym_path = usr_bin / bin_short
+                                if not sym_path.exists() and not sym_path.is_symlink():
+                                    try:
+                                        sym_path.symlink_to(raw_bin)
+                                    except Exception:
+                                        pass
+                            if wayland_fix and deb_info.get("is_electron"):
+                                extra_flags = "--ozone-platform-hint=auto --no-sandbox" if "--no-sandbox" not in exec_val else "--ozone-platform-hint=auto"
+                                if "--ozone-platform" not in exec_val:
+                                    if " %" in exec_val:
+                                        idx = exec_val.find(" %")
+                                        exec_val = exec_val[:idx] + f" {extra_flags}" + exec_val[idx:]
+                                    else:
+                                        exec_val = exec_val + f" {extra_flags}"
+                                    line = f"Exec={exec_val}"
                         new_lines.append(line)
                     dt_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
                 except Exception:
@@ -8663,14 +10949,14 @@ class DebPackageManager:
 
         # 4. Write .PKGINFO
         pkginfo_lines = [
-            "# Generated by Aura Store Deb Bridge for Arch Linux",
+            "# Generated by ArkST Deb Bridge for Arch Linux",
             f"pkgname = {pkgname}",
             f"pkgbase = {pkgname}",
             f"pkgver = {pkgver}-1",
             f"pkgdesc = {deb_info.get('desc', 'Converted Debian package').replace(chr(10), ' ')}",
             f"url = {deb_info.get('url', '')}",
             f"builddate = {int(time.time())}",
-            "packager = Aura Deb Bridge <aura@archlinux>",
+            "packager = ArkST Deb Bridge <arkst@archlinux>",
             f"size = {total_size}",
             f"arch = {arch}",
             f"license = {deb_info.get('license', 'custom')}",
@@ -8737,7 +11023,7 @@ class DebPackageManager:
 
         def _task():
             nonlocal _report
-            staging_dir = Path(tempfile.mkdtemp(prefix="aura-deb-build-"))
+            staging_dir = Path(tempfile.mkdtemp(prefix="arkst-deb-build-"))
             try:
                 _report(0.08, "Inspecting Debian (.deb) package metadata...")
                 info = self.inspect_deb(deb_path)
@@ -8897,7 +11183,7 @@ class DebPackageManager:
                 if progress_cb:
                     progress_cb(0.03, f"Connecting to download {fname}...")
 
-                req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0 Aura-Store/2.0"})
+                req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0 ArkST-Store/3.0"})
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     total_bytes = int(resp.headers.get("Content-Length", "0") or "0")
                     downloaded = 0
@@ -8989,7 +11275,11 @@ class HyprlandManager:
     - One-click native Wayland Ozone flag optimizer for Electron/Chromium desktop applications
     """
 
-    HYPR_CONF_PATH = Path.home() / ".config" / "hypr" / "hyprland.conf"
+    HYPR_DIR = Path.home() / ".config" / "hypr"
+    HYPR_CONF_PATH = HYPR_DIR / "hyprland.conf"
+    HYPR_LUA_PATH = HYPR_DIR / "hyprland.lua"
+    HYPR_RULES_LUA_PATH = HYPR_DIR / "hyprland" / "rules.lua"
+    HYPR_KEYBINDS_LUA_PATH = HYPR_DIR / "hyprland" / "keybinds.lua"
     ELECTRON_FLAGS_FILES = [
         Path.home() / ".config" / "electron-flags.conf",
         Path.home() / ".config" / "code-flags.conf",
@@ -9020,8 +11310,9 @@ class HyprlandManager:
 
     def get_status(self) -> Dict[str, Any]:
         """Gather comprehensive Hyprland compositor, monitor, portal, and companion stack status."""
-        hypr_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
-        wayland_disp = os.environ.get("WAYLAND_DISPLAY", "")
+        env = self._get_hypr_env()
+        hypr_sig = env.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+        wayland_disp = env.get("WAYLAND_DISPLAY", "")
         xdg_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
         is_hyprland = bool(hypr_sig or "hyprland" in xdg_desktop.lower() or shutil.which("hyprctl"))
 
@@ -9029,7 +11320,7 @@ class HyprlandManager:
         monitors: List[Dict[str, Any]] = []
         if shutil.which("hyprctl"):
             try:
-                vproc = subprocess.run(["hyprctl", "version"], capture_output=True, text=True, timeout=2)
+                vproc = subprocess.run(["hyprctl", "version"], capture_output=True, text=True, env=env, timeout=2)
                 if vproc.returncode == 0 and vproc.stdout:
                     first_line = vproc.stdout.splitlines()[0].strip()
                     m_ver = re.search(r'(Hyprland\s+[0-9\.]+(?:-[a-zA-Z0-9]+)?)', first_line)
@@ -9043,7 +11334,7 @@ class HyprlandManager:
             except Exception:
                 pass
             try:
-                mproc = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, timeout=2)
+                mproc = subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, text=True, env=env, timeout=2)
                 if mproc.returncode == 0 and mproc.stdout.strip().startswith("["):
                     mdata = json.loads(mproc.stdout)
                     for m in mdata:
@@ -9084,50 +11375,342 @@ class HyprlandManager:
             "wayland_flags_configured": wayland_flags_configured,
         }
 
-    def are_window_rules_configured(self) -> bool:
-        if not self.HYPR_CONF_PATH.exists():
-            return False
+    @staticmethod
+    def _get_hypr_env() -> Dict[str, str]:
+        """Return environment dict with HYPRLAND_INSTANCE_SIGNATURE & XDG_RUNTIME_DIR auto-discovered."""
+        env = os.environ.copy()
+        uid = os.getuid()
+        runtime_dir = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
+        env["XDG_RUNTIME_DIR"] = runtime_dir
+        if not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            for base in (Path(runtime_dir) / "hypr", Path("/tmp/hypr")):
+                if base.exists():
+                    try:
+                        dirs = sorted(
+                            [d for d in base.iterdir() if d.is_dir() and (d / ".socket.sock").exists()],
+                            key=lambda d: d.stat().st_mtime,
+                            reverse=True,
+                        )
+                        if dirs:
+                            env["HYPRLAND_INSTANCE_SIGNATURE"] = dirs[0].name
+                            break
+                    except Exception:
+                        pass
+        return env
+
+    @classmethod
+    def _build_compatible_rule_lines(cls, env: Dict[str, str], existing_conf: str = "") -> List[str]:
+        """Detect whether running Hyprland uses windowrulev2, windowrule v2, or Hyprland 0.53+ match:class syntax."""
+        use_match_syntax = "match:class" in existing_conf
+        rule_kw = "windowrulev2"
+
+        if shutil.which("hyprctl") and env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            try:
+                p1 = subprocess.run(
+                    ["hyprctl", "keyword", "windowrulev2", "float, class:^(io.github.arkst)$"],
+                    capture_output=True, text=True, env=env, timeout=2
+                )
+                out1 = ((p1.stdout or "") + " " + (p1.stderr or "")).lower()
+                if p1.returncode == 0 and "ok" in out1 and "unknown" not in out1 and "error" not in out1 and "invalid" not in out1:
+                    rule_kw = "windowrulev2"
+                    use_match_syntax = False
+                else:
+                    p2 = subprocess.run(
+                        ["hyprctl", "keyword", "windowrule", "float, class:^(io.github.arkst)$"],
+                        capture_output=True, text=True, env=env, timeout=2
+                    )
+                    out2 = ((p2.stdout or "") + " " + (p2.stderr or "")).lower()
+                    if p2.returncode == 0 and "ok" in out2 and "unknown" not in out2 and "error" not in out2 and "invalid" not in out2:
+                        rule_kw = "windowrule"
+                        use_match_syntax = False
+                    else:
+                        p3 = subprocess.run(
+                            ["hyprctl", "keyword", "windowrule", "float on, match:class ^(io.github.arkst)$"],
+                            capture_output=True, text=True, env=env, timeout=2
+                        )
+                        out3 = ((p3.stdout or "") + " " + (p3.stderr or "")).lower()
+                        if p3.returncode == 0 and "ok" in out3:
+                            rule_kw = "windowrule"
+                            use_match_syntax = True
+            except Exception:
+                pass
+
+        if use_match_syntax or not rule_kw:
+            return [
+                r"windowrule = float, match:class ^(io\.github\.arkst|arkst|arkst\.py)$",
+                r"windowrule = center, match:class ^(io\.github\.arkst|arkst|arkst\.py)$",
+                r"windowrule = size 1200 760, match:class ^(io\.github\.arkst|arkst|arkst\.py)$",
+                r"windowrule = float, match:class ^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+                r"windowrule = center, match:class ^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+                r"windowrule = size 430 240, match:class ^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+                r"windowrule = pin, match:class ^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+                r"windowrule = stayfocused, match:class ^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+                "unbind = SUPER, A",
+                "bind = SUPER, A, exec, arkst",
+            ]
+        return [
+            rf"{rule_kw} = float, class:^(io\.github\.arkst|arkst|arkst\.py)$",
+            rf"{rule_kw} = center, class:^(io\.github\.arkst|arkst|arkst\.py)$",
+            rf"{rule_kw} = size 1200 760, class:^(io\.github\.arkst|arkst|arkst\.py)$",
+            rf"{rule_kw} = float, class:^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+            rf"{rule_kw} = center, class:^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+            rf"{rule_kw} = size 430 240, class:^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+            rf"{rule_kw} = pin, class:^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+            rf"{rule_kw} = stayfocused, class:^(io\.github\.arkst\.Askpass|arkst-askpass)$",
+            "unbind = SUPER, A",
+            "bind = SUPER, A, exec, arkst",
+        ]
+
+    @classmethod
+    def _apply_live_window_state(cls, enable: bool, env: Dict[str, str]):
+        """Immediately float, resize & center (or re-tile) any open ArkST window in the live Hyprland session."""
+        if not shutil.which("hyprctl") or not env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            return
         try:
-            content = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace")
-            return "hyprland-aura.conf" in content or "io.github.aura" in content
+            cproc = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True, env=env, timeout=3)
+            if cproc.returncode == 0 and cproc.stdout.strip().startswith("["):
+                clients = json.loads(cproc.stdout)
+                for cl in clients:
+                    c_cls = (cl.get("class") or "").lower()
+                    c_init = (cl.get("initialClass") or "").lower()
+                    c_title = (cl.get("title") or "").strip()
+                    addr = cl.get("address", "")
+                    if not addr:
+                        continue
+                    if any(k in (c_cls, c_init) for k in ("io.github.arkst", "arkst", "arkst.py")) or c_title == "ArkST":
+                        is_floating = bool(cl.get("floating", False))
+                        if enable:
+                            if not is_floating:
+                                r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.window.float({{ action = "on", window = "address:{addr}" }})'], capture_output=True, env=env, timeout=2)
+                                if r.returncode != 0:
+                                    r2 = subprocess.run(["hyprctl", "dispatch", "setfloating", f"address:{addr}"], capture_output=True, env=env, timeout=2)
+                                    if r2.returncode != 0:
+                                        subprocess.run(["hyprctl", "dispatch", "togglefloating", f"address:{addr}"], capture_output=True, env=env, timeout=2)
+                            subprocess.run(["hyprctl", "dispatch", f'hl.dsp.window.center({{ window = "address:{addr}" }})'], capture_output=True, env=env, timeout=2)
+                            subprocess.run(["hyprctl", "dispatch", "resizewindowpixel", f"exact 1200 760,address:{addr}"], capture_output=True, env=env, timeout=2)
+                            subprocess.run(["hyprctl", "dispatch", "centerwindow"], capture_output=True, env=env, timeout=2)
+                        else:
+                            if is_floating:
+                                r = subprocess.run(["hyprctl", "dispatch", f'hl.dsp.window.float({{ action = "off", window = "address:{addr}" }})'], capture_output=True, env=env, timeout=2)
+                                if r.returncode != 0:
+                                    r2 = subprocess.run(["hyprctl", "dispatch", "settiled", f"address:{addr}"], capture_output=True, env=env, timeout=2)
+                                    if r2.returncode != 0:
+                                        subprocess.run(["hyprctl", "dispatch", "togglefloating", f"address:{addr}"], capture_output=True, env=env, timeout=2)
         except Exception:
-            return False
+            pass
+
+    @property
+    def hypr_rules_lua_path(self) -> Path:
+        return self.HYPR_CONF_PATH.parent / "hyprland" / "rules.lua"
+
+    @property
+    def hypr_keybinds_lua_path(self) -> Path:
+        return self.HYPR_CONF_PATH.parent / "hyprland" / "keybinds.lua"
+
+    @property
+    def hypr_lua_path(self) -> Path:
+        return self.HYPR_CONF_PATH.parent / "hyprland.lua"
+
+    def are_window_rules_configured(self) -> bool:
+        if self.hypr_rules_lua_path.exists():
+            try:
+                content = self.hypr_rules_lua_path.read_text(encoding="utf-8", errors="replace")
+                if "io.github.arkst" in content:
+                    return True
+            except Exception:
+                pass
+        if self.hypr_lua_path.exists():
+            try:
+                content = self.hypr_lua_path.read_text(encoding="utf-8", errors="replace")
+                if "io.github.arkst" in content:
+                    return True
+            except Exception:
+                pass
+        if self.HYPR_CONF_PATH.exists():
+            try:
+                content = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace")
+                return "hyprland-arkst.conf" in content or "io.github.arkst" in content
+            except Exception:
+                pass
+        return False
 
     def configure_window_rules(self, enable: bool = True) -> Tuple[bool, str]:
-        """Inject or remove Aura floating window rules and Super+A shortcut in ~/.config/hypr/hyprland.conf."""
+        """Inject or remove ArkST floating window rules in ~/.config/hypr/hyprland/rules.lua (or hyprland.conf), purge all legacy Aura/Ark rules across ~/.config/hypr, reload Hyprland, and float/tile live."""
         try:
-            self.HYPR_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
-            rule_candidates = [
+            hypr_dir = self.HYPR_CONF_PATH.parent
+            hypr_dir.mkdir(parents=True, exist_ok=True)
+            env = self._get_hypr_env()
+
+            # 1. Delete any leftover legacy Aura/Ark hyprland rule files
+            for legacy_rule in (
                 Path.home() / ".local" / "share" / "aura" / "data" / "hyprland-aura.conf",
-                Path("/usr/share/aura/hyprland-aura.conf"),
-                Path(__file__).resolve().parent / "data" / "hyprland-aura.conf",
-            ]
-            rule_file = next((p for p in rule_candidates if p.exists()), rule_candidates[0])
-            if not rule_file.exists():
-                rule_file.parent.mkdir(parents=True, exist_ok=True)
-                rule_file.write_text(
-                    "windowrulev2 = float, class:^(io.github.aura)$\n"
-                    "windowrulev2 = center, class:^(io.github.aura)$\n"
-                    "windowrulev2 = size 1040 680, class:^(io.github.aura)$\n"
-                    "windowrulev2 = opaque, class:^(io.github.aura)$\n",
+                Path.home() / ".local" / "share" / "ark" / "data" / "hyprland-ark.conf",
+                hypr_dir / "hyprland-aura.conf",
+                hypr_dir / "hyprland-ark.conf",
+            ):
+                try:
+                    legacy_rule.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            marker_start = "# >>> ArkST Hyprland Integration >>>"
+            marker_end = "# <<< ArkST Hyprland Integration <<<"
+            lua_marker_start = "-- >>> ArkST Hyprland Integration >>>"
+            lua_marker_end = "-- <<< ArkST Hyprland Integration <<<"
+            legacy_starts = {
+                "# >>> Aura Store Hyprland Integration >>>",
+                "# >>> Aura Hyprland Integration >>>",
+                "# >>> Ark Store Hyprland Integration >>>",
+                "# >>> Ark Hyprland Integration >>>",
+                "-- >>> Aura Store Hyprland Integration >>>",
+                "-- >>> Aura Hyprland Integration >>>",
+                "-- >>> Ark Store Hyprland Integration >>>",
+                "-- >>> Ark Hyprland Integration >>>",
+                marker_start,
+                lua_marker_start,
+            }
+            legacy_ends = {
+                "# <<< Aura Store Hyprland Integration <<<",
+                "# <<< Aura Hyprland Integration <<<",
+                "# <<< Ark Store Hyprland Integration <<<",
+                "# <<< Ark Hyprland Integration <<<",
+                "-- <<< Aura Store Hyprland Integration <<<",
+                "-- <<< Aura Hyprland Integration <<<",
+                "-- <<< Ark Store Hyprland Integration <<<",
+                "-- <<< Ark Hyprland Integration <<<",
+                marker_end,
+                lua_marker_end,
+            }
+            legacy_tokens = (
+                "hyprland-aura.conf",
+                "hyprland-ark.conf",
+                "io.github.aura",
+                r"io\.github\.aura",
+                "io.github.(ark|aura)",
+                r"io\.github\.(ark|aura)",
+                "Aura Store Hyprland Integration",
+                "Aura Hyprland Integration",
+                "Aura Package Hub",
+                "exec, aura",
+                "exec, /usr/bin/aura",
+                "exec, ~/.local/bin/aura",
+                "exec, $HOME/.local/bin/aura",
+            )
+
+            # 2. Clean all secondary *.conf and *.lua files in ~/.config/hypr/
+            all_hypr_files = list(hypr_dir.glob("*.conf")) + list(hypr_dir.glob("**/*.conf")) + \
+                             list(hypr_dir.glob("*.lua")) + list(hypr_dir.glob("**/*.lua"))
+            for extra_file in all_hypr_files:
+                if extra_file.resolve() in (self.HYPR_CONF_PATH.resolve(), self.hypr_rules_lua_path.resolve(), self.hypr_keybinds_lua_path.resolve()):
+                    continue
+                if extra_file.name == "hyprland-arkst.conf":
+                    continue
+                try:
+                    etxt = extra_file.read_text(encoding="utf-8", errors="replace")
+                    if any(t in etxt for t in legacy_tokens):
+                        e_cleaned = []
+                        in_blk = False
+                        for eline in etxt.splitlines():
+                            es = eline.strip()
+                            if es in legacy_starts:
+                                in_blk = True
+                                continue
+                            if es in legacy_ends:
+                                in_blk = False
+                                continue
+                            if any(t in eline for t in legacy_tokens):
+                                continue
+                            if not in_blk:
+                                e_cleaned.append(eline)
+                        extra_file.write_text("\n".join(e_cleaned).strip() + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+            # 3. Handle Modern Hyprland Lua Configuration (rules.lua and keybinds.lua)
+            if self.hypr_rules_lua_path.exists():
+                try:
+                    rtxt = self.hypr_rules_lua_path.read_text(encoding="utf-8", errors="replace")
+                    rtxt = rtxt.replace('"io.github.aura"', '"io.github.arkst.*"')
+                    r_lines = []
+                    in_lua_blk = False
+                    for line in rtxt.splitlines():
+                        s = line.strip()
+                        if s in legacy_starts:
+                            in_lua_blk = True
+                            continue
+                        if s in legacy_ends:
+                            in_lua_blk = False
+                            continue
+                        if not in_lua_blk and ("-- Aura Package Hub" not in s and "io.github.aura" not in s):
+                            r_lines.append(line)
+                    if enable:
+                        lua_rule_block = [
+                            "",
+                            lua_marker_start,
+                            'hl.window_rule({ match = { class = "io.github.arkst.*" }, float = true, center = true, size = "1200 760", opaque = true })',
+                            'hl.window_rule({ match = { class = "io.github.arkst.Askpass" }, float = true, center = true, size = "430 240", pin = true, stay_focused = true })',
+                            lua_marker_end,
+                        ]
+                        r_lines.extend(lua_rule_block)
+                    self.hypr_rules_lua_path.write_text("\n".join(r_lines).strip() + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+            if self.hypr_keybinds_lua_path.exists():
+                try:
+                    ktxt = self.hypr_keybinds_lua_path.read_text(encoding="utf-8", errors="replace")
+                    k_lines = []
+                    in_k_blk = False
+                    for line in ktxt.splitlines():
+                        s = line.strip()
+                        if s in legacy_starts:
+                            in_k_blk = True
+                            continue
+                        if s in legacy_ends:
+                            in_k_blk = False
+                            continue
+                        if not in_k_blk and "arkst" not in s and "aura" not in s:
+                            k_lines.append(line)
+                    if enable:
+                        lua_keybind_block = [
+                            "",
+                            lua_marker_start,
+                            'create_bind("SUPER + A", hl.dsp.exec_cmd("arkst"))',
+                            lua_marker_end,
+                        ]
+                        k_lines.extend(lua_keybind_block)
+                    self.hypr_keybinds_lua_path.write_text("\n".join(k_lines).strip() + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+
+            # 4. Handle Standard / Legacy hyprland.conf
+            existing = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace") if self.HYPR_CONF_PATH.exists() else ""
+            rule_lines = self._build_compatible_rule_lines(env, existing)
+
+            # Write local user copy of hyprland-arkst.conf with the exact compatible syntax
+            user_rule_file = Path.home() / ".local" / "share" / "arkst" / "data" / "hyprland-arkst.conf"
+            try:
+                user_rule_file.parent.mkdir(parents=True, exist_ok=True)
+                user_rule_file.write_text(
+                    "# Hyprland Window Rules & Keybind for ArkST (io.github.arkst)\n" + "\n".join(rule_lines) + "\n",
                     encoding="utf-8"
                 )
+            except Exception:
+                pass
 
-            existing = self.HYPR_CONF_PATH.read_text(encoding="utf-8", errors="replace") if self.HYPR_CONF_PATH.exists() else ""
-            marker_start = "# >>> Aura Store Hyprland Integration >>>"
-            marker_end = "# <<< Aura Store Hyprland Integration <<<"
-
-            # Clean any existing block
             cleaned_lines = []
             in_block = False
             for line in existing.splitlines():
-                if line.strip() == marker_start:
+                s = line.strip()
+                if s in legacy_starts:
                     in_block = True
                     continue
-                if line.strip() == marker_end:
+                if s in legacy_ends:
                     in_block = False
                     continue
-                if "hyprland-aura.conf" in line and not enable:
+                if any(tok in line for tok in legacy_tokens):
+                    continue
+                if ("hyprland-arkst.conf" in line or "io.github.arkst" in line or "exec, arkst" in line) and not enable:
                     continue
                 if not in_block:
                     cleaned_lines.append(line)
@@ -9136,21 +11719,23 @@ class HyprlandManager:
                 block = [
                     "",
                     marker_start,
-                    f"source = {rule_file}",
+                    f"# Source: {user_rule_file} (hyprland-arkst.conf)",
+                    *rule_lines,
                     marker_end,
                 ]
                 cleaned_lines.extend(block)
 
             self.HYPR_CONF_PATH.write_text("\n".join(cleaned_lines).strip() + "\n", encoding="utf-8")
 
-            if shutil.which("hyprctl") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
-                subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=3)
+            if shutil.which("hyprctl") and env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                subprocess.run(["hyprctl", "reload"], capture_output=True, env=env, timeout=3)
+                self._apply_live_window_state(enable=enable, env=env)
 
             if enable:
-                return True, "Hyprland floating window rules applied and compositor reloaded!"
-            return True, "Aura window rules removed from hyprland.conf."
+                return True, "ArkST Hyprland floating rules & Super+A shortcut applied live!"
+            return True, "ArkST window rules removed from hyprland.conf and hyprland.lua."
         except Exception as e:
-            return False, f"Failed updating hyprland.conf: {e}"
+            return False, f"Failed updating hyprland config: {e}"
 
     def are_electron_wayland_flags_configured(self) -> bool:
         ef = self.ELECTRON_FLAGS_FILES[0]
@@ -9304,7 +11889,7 @@ class SystemDoctor:
                 return
             if st["active_processes"] or (self.pm and self.pm.is_busy()):
                 if complete_cb:
-                    procs_str = ", ".join(st["active_processes"]) if st["active_processes"] else "Aura package installer"
+                    procs_str = ", ".join(st["active_processes"]) if st["active_processes"] else "ArkST package installer"
                     complete_cb(False, f"Cannot remove lock while {procs_str} is actively running.")
                 return
             env = os.environ.copy()
@@ -9403,3 +11988,6 @@ class SystemDoctor:
                     if complete_cb:
                         complete_cb(False, f"Keyring repair failed: {e}")
         threading.Thread(target=_task, daemon=True).start()
+
+import sys as _sys
+_sys.modules.setdefault('aura_backend', _sys.modules[__name__])
