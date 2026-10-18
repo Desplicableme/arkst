@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+import sys
+import os
+
+try:
+    from arkst_gtk_shim import install_gtk4_shim_if_needed
+    install_gtk4_shim_if_needed()
+except Exception:
+    pass
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Adw, Gdk, GLib
+GLib.set_prgname("io.github.arkst.Askpass")
+GLib.set_application_name("ArkST Authentication")
+
+CSS = """
+window.background {
+    background: transparent;
+}
+.askpass-card {
+    background: linear-gradient(155deg, rgba(16, 23, 42, 0.96), rgba(7, 10, 20, 0.98));
+    border-radius: 24px;
+    border: 1px solid rgba(56, 189, 248, 0.28);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    padding: 28px;
+}
+.title-text {
+    font-size: 20px;
+    font-weight: 800;
+    color: #f8fafc;
+    letter-spacing: -0.4px;
+}
+.subtitle-text {
+    font-size: 13px;
+    color: #94a3b8;
+    margin-bottom: 18px;
+}
+.password-entry {
+    background: rgba(15, 23, 42, 0.78);
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 14px;
+    color: #f8fafc;
+    padding: 10px 14px;
+    font-size: 15px;
+    transition: all 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.password-entry:focus-within {
+    border-color: #38bdf8;
+    background: rgba(15, 23, 42, 0.95);
+    box-shadow: 0 0 16px rgba(56, 189, 248, 0.28);
+}
+.btn-cancel {
+    background: rgba(255, 255, 255, 0.06);
+    color: #cbd5e1;
+    border-radius: 12px;
+    padding: 10px 20px;
+    font-weight: 700;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+.btn-auth {
+    background: linear-gradient(135deg, #38bdf8, #6366f1);
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 10px 24px;
+    font-weight: 800;
+    border: none;
+    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.35);
+    transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-auth:hover {
+    background: linear-gradient(135deg, #7dd3fc, #818cf8);
+    box-shadow: 0 8px 25px rgba(56, 189, 248, 0.5);
+    transform: translateY(-1px);
+}
+.icon-glow {
+    color: #38bdf8;
+    margin-bottom: 12px;
+    filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.55));
+}
+"""
+
+
+class AskpassApp(Adw.Application):
+    def __init__(self, prompt):
+        super().__init__(application_id="io.github.arkst.Askpass")
+        self.prompt = prompt
+        self.password = None
+        self.exit_code = 1
+
+    def do_activate(self):
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS.encode("utf-8"))
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        self.win = Gtk.ApplicationWindow(application=self)
+        self.win.set_title("ArkST Authentication")
+        self.win.set_default_size(400, -1)
+        self.win.set_resizable(False)
+        self.win.set_decorated(False)
+
+        key_ctrl = Gtk.EventControllerKey()
+        key_ctrl.connect("key-pressed", self.on_key_pressed)
+        self.win.add_controller(key_ctrl)
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("askpass-card")
+
+        icon = Gtk.Image.new_from_icon_name("dialog-password-symbolic")
+        icon.set_pixel_size(48)
+        icon.add_css_class("icon-glow")
+        icon.set_halign(Gtk.Align.CENTER)
+        card.append(icon)
+
+        title = Gtk.Label(label="Authentication Required")
+        title.add_css_class("title-text")
+        title.set_halign(Gtk.Align.CENTER)
+        card.append(title)
+
+        sub = Gtk.Label(label=self.prompt)
+        sub.add_css_class("subtitle-text")
+        sub.set_wrap(True)
+        sub.set_max_width_chars(38)
+        sub.set_justify(Gtk.Justification.CENTER)
+        sub.set_halign(Gtk.Align.CENTER)
+        card.append(sub)
+
+        self.entry = Gtk.PasswordEntry()
+        self.entry.set_show_peek_icon(True)
+        self.entry.add_css_class("password-entry")
+        self.entry.connect("activate", self.on_submit)
+        card.append(self.entry)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        btn_box.set_margin_top(16)
+        btn_box.set_halign(Gtk.Align.END)
+
+        btn_cancel = Gtk.Button(label="Cancel")
+        btn_cancel.add_css_class("btn-cancel")
+        btn_cancel.connect("clicked", self.on_cancel)
+        btn_box.append(btn_cancel)
+
+        btn_ok = Gtk.Button(label="Authenticate")
+        btn_ok.add_css_class("btn-auth")
+        btn_ok.connect("clicked", self.on_submit)
+        btn_box.append(btn_ok)
+
+        card.append(btn_box)
+        self.win.set_child(card)
+        self.win.present()
+        GLib.timeout_add(50, self._focus_entry)
+
+    def _focus_entry(self):
+        self.entry.grab_focus()
+        return False
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval == Gdk.KEY_Escape:
+            self.on_cancel(None)
+            return True
+        return False
+
+    def on_submit(self, *args):
+        self.password = self.entry.get_text()
+        self.exit_code = 0
+        self.win.close()
+        self.quit()
+
+    def on_cancel(self, *args):
+        self.exit_code = 1
+        self.win.close()
+        self.quit()
+
+
+if __name__ == "__main__":
+    prompt_text = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "ArkST requires administrative privileges to continue."
+    )
+    if prompt_text.strip().startswith("[sudo]"):
+        prompt_text = "ArkST requires administrative privileges to manage packages."
+
+    app = AskpassApp(prompt_text)
+    app.run([])
+
+    if app.exit_code == 0 and app.password is not None:
+        sys.stdout.write(app.password + "\n")
+        sys.stdout.flush()
+        sys.exit(0)
+    else:
+        sys.exit(1)
