@@ -1,10 +1,12 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*.pyc
 *$py.class
+.pytest_cache/
 
 # Local User Vault & Credentials (CRITICAL: NEVER COMMIT PASSWORDS)
-.aura_vault
+.arkst_vault
 *.vault
 .env
 .env.*
