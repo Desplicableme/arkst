@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.arkst</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>ArkST</name>
+  <summary>Universal Linux App Store for Arch Linux, AUR, Flathub, Snap, Docker, and .deb packages</summary>
+  <url type="homepage">https://github.com/Desplicableme/arkst</url>
+  <description>
+    <p>
+      ArkST is a blazing-fast, modern GTK4/Libadwaita universal software center designed for
+      Arch Linux, CachyOS, EndeavourOS, and Hyprland Wayland desktops.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.arkst.desktop</launchable>
+  <categories>
+    <category>System</category>
+    <category>PackageManager</category>
+  </categories>
+  <provides>
+    <binary>arkst</binary>
+    <mediatype>application/vnd.debian.binary-package</mediatype>
+    <mediatype>application/x-deb</mediatype>
+    <mediatype>application/vnd.flatpak.ref</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

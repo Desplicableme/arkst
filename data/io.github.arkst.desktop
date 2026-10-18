@@ -1,0 +1,40 @@
+[Desktop Entry]
+Version=1.0
+Name=ArkST
+GenericName=Software Center & Package Manager
+Comment=ArkST — Universal Linux App Store for Arch Linux, AUR, Flathub, Snap, Docker & .deb packages
+Exec=arkst %U
+TryExec=arkst
+Icon=io.github.arkst
+Terminal=false
+Type=Application
+Categories=System;PackageManager;Settings;Utility;GTK;
+Keywords=arkst;ark;pacman;paru;yay;aur;flathub;flatpak;deb;hyprland;store;apps;install;software;docker;snap;
+StartupNotify=true
+StartupWMClass=io.github.arkst
+MimeType=application/vnd.debian.binary-package;application/x-deb;application/vnd.flatpak.ref;x-scheme-handler/appstream;x-scheme-handler/arkst;
+Actions=Updates;Flathub;DebInstaller;HyprlandHub;Docker;Installed;
+
+[Desktop Action Updates]
+Name=Check Software Updates
+Exec=arkst --updates
+
+[Desktop Action Flathub]
+Name=Flathub Store
+Exec=arkst --flathub
+
+[Desktop Action DebInstaller]
+Name=.deb Package Bridge
+Exec=arkst --deb
+
+[Desktop Action HyprlandHub]
+Name=Hyprland Hub
+Exec=arkst --hyprland
+
+[Desktop Action Docker]
+Name=Docker Applications
+Exec=arkst --docker
+
+[Desktop Action Installed]
+Name=Installed Applications
+Exec=arkst --installed
