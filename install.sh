@@ -333,6 +333,16 @@ for aid in existing_apps:
     fi
 }
 
+# Fast update mode for inbuilt self-updater
+if [[ "$*" == *"--update"* ]]; then
+    info "Running ArkST in fast update mode..."
+    check_deps
+    install_files
+    configure_hyprland_rules
+    ok "ArkST update completed successfully!"
+    exit 0
+fi
+
 purge_previous_aura_or_ark
 check_deps
 install_files
