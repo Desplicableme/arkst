@@ -30,6 +30,8 @@ import urllib.parse
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Any, Callable
 
+__version__ = "3.1.0"
+
 def _resolve_writable_dir(preferred: Path, fallback_name: str) -> Path:
     try:
         preferred.mkdir(parents=True, exist_ok=True)
@@ -1491,6 +1493,7 @@ _DESKTOP_ENTRIES_CACHE: Dict[str, str] = {}
 
 DESKTOP_SEARCH_DIRS: List[Path] = [
     Path("/usr/share/applications"),
+    Path("/usr/local/share/applications"),
     Path(os.path.expanduser("~/.local/share/applications")),
     Path("/var/lib/flatpak/exports/share/applications"),
     Path(os.path.expanduser("~/.local/share/flatpak/exports/share/applications")),
@@ -1911,11 +1914,11 @@ def resolve_icon_name(pkg_name: str, desc: str = "") -> str:
     if any(k in combined for k in ["terminal", "shell", "console", "emulator", "prompt"]):
         return "utilities-terminal"
     if any(k in combined for k in ["audio", "music", "sound", "player", "alsa", "pipewire", "pulse"]):
-        return "multimedia-audio-player"
+        return "applications-multimedia"
     if any(k in combined for k in ["video", "movie", "recording", "stream", "codec", "ffmpeg"]):
-        return "video-player"
+        return "applications-multimedia"
     if any(k in combined for k in ["editor", "code", "ide", "develop", "compiler", "sdk"]):
-        return "text-editor"
+        return "accessories-text-editor"
     if any(k in combined for k in ["game", "gaming", "steam", "emulator", "wine", "proton"]):
         return "applications-games"
     if any(k in combined for k in ["image", "photo", "graphics", "paint", "draw", "render"]):
@@ -5909,6 +5912,186 @@ class PackageManager:
 
 
 
+
+class ArkSTSelfUpdater:
+    """
+    Inbuilt Self-Updater for ArkST (Universal Linux App Store):
+    - Connects directly to GitHub (https://github.com/Desplicableme/arkst)
+    - Checks GitHub Releases API and main branch PKGBUILD for newest versions
+    - Performs safe background self-updates for both git repository workspaces and system installs
+    - Reports real-time progress callbacks and completion notifications
+    """
+    CURRENT_VERSION = __version__
+    REPO_API_URL = "https://api.github.com/repos/Desplicableme/arkst/releases/latest"
+    REPO_RAW_PKGBUILD = "https://raw.githubusercontent.com/Desplicableme/arkst/main/PKGBUILD"
+    REPO_RAW_BACKEND = "https://raw.githubusercontent.com/Desplicableme/arkst/main/arkst_backend.py"
+    REPO_URL = "https://github.com/Desplicableme/arkst"
+
+    def __init__(self, current_version: str = CURRENT_VERSION):
+        self.current_version = current_version
+        self._cached_update_info: Optional[Dict[str, Any]] = None
+
+    @staticmethod
+    def _parse_version(v_str: str) -> Tuple[int, ...]:
+        clean = re.sub(r'^[vV]', '', (v_str or "").strip())
+        parts = []
+        for x in clean.split('.'):
+            num = re.match(r'^\d+', x)
+            parts.append(int(num.group(0)) if num else 0)
+        return tuple(parts)
+
+    def check_for_updates(self, timeout: int = 5) -> Optional[Dict[str, Any]]:
+        """
+        Check GitHub for newer versions of ArkST.
+        Returns a dictionary with update metadata if a newer version is found, or None.
+        """
+        curr_tuple = self._parse_version(self.current_version)
+        latest_ver = ""
+        release_notes = ""
+        html_url = self.REPO_URL
+        release_name = ""
+
+        # 1. Try GitHub Releases API
+        try:
+            req = urllib.request.Request(
+                self.REPO_API_URL,
+                headers={"User-Agent": f"ArkST/{self.current_version}", "Accept": "application/vnd.github.v3+json"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict):
+                    tag = data.get("tag_name", "") or data.get("name", "")
+                    if tag:
+                        latest_ver = re.sub(r'^[vV]', '', tag).strip()
+                        release_name = data.get("name", f"ArkST v{latest_ver}")
+                        release_notes = data.get("body", "").strip()
+                        html_url = data.get("html_url", html_url)
+        except Exception:
+            pass
+
+        # 2. Fallback to raw PKGBUILD pkgver on main branch
+        if not latest_ver:
+            try:
+                req = urllib.request.Request(
+                    self.REPO_RAW_PKGBUILD,
+                    headers={"User-Agent": f"ArkST/{self.current_version}"}
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    txt = resp.read().decode("utf-8", errors="ignore")
+                    m = re.search(r'^\s*pkgver\s*=\s*([0-9\.]+)', txt, re.MULTILINE)
+                    if m:
+                        latest_ver = m.group(1).strip()
+                        release_name = f"ArkST v{latest_ver}"
+                        release_notes = "Official performance improvements, UI enhancements, and feature updates."
+            except Exception:
+                pass
+
+        if latest_ver:
+            latest_tuple = self._parse_version(latest_ver)
+            if latest_tuple > curr_tuple:
+                info = {
+                    "has_update": True,
+                    "current_version": self.current_version,
+                    "latest_version": latest_ver,
+                    "release_name": release_name or f"ArkST v{latest_ver}",
+                    "release_notes": release_notes or f"A new version of ArkST (v{latest_ver}) is available on GitHub.",
+                    "html_url": html_url,
+                }
+                self._cached_update_info = info
+                return info
+
+        return None
+
+    def perform_auto_update(
+        self,
+        progress_cb: Optional[Callable[[float, str], None]] = None,
+        completion_cb: Optional[Callable[[bool, str], None]] = None
+    ):
+        """
+        Safely download and apply the update in a background thread.
+        Handles both git cloned development workspace and /usr/lib/arkst system installation.
+        """
+        def _worker():
+            try:
+                if progress_cb:
+                    progress_cb(0.15, "Connecting to GitHub repository...")
+
+                app_dir = Path(__file__).resolve().parent
+                git_dir = app_dir / ".git"
+
+                if git_dir.exists() and shutil.which("git"):
+                    if progress_cb:
+                        progress_cb(0.35, "Fetching latest changes via git...")
+                    res = subprocess.run(
+                        ["git", "pull", "--ff-only", "origin", "main"],
+                        cwd=str(app_dir),
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    if res.returncode != 0:
+                        subprocess.run(["git", "fetch", "origin", "main"], cwd=str(app_dir), timeout=20)
+                        res2 = subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=str(app_dir), capture_output=True, text=True, timeout=30)
+                        if res2.returncode != 0:
+                            raise RuntimeError(f"Git pull failed: {res.stderr or res2.stderr}")
+
+                    if progress_cb:
+                        progress_cb(0.80, "Verifying files and permissions...")
+                else:
+                    if progress_cb:
+                        progress_cb(0.35, "Downloading update package from GitHub...")
+                    tar_url = "https://github.com/Desplicableme/arkst/archive/refs/heads/main.tar.gz"
+                    req = urllib.request.Request(tar_url, headers={"User-Agent": f"ArkST/{self.current_version}"})
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        tar_path = Path(tmpdir) / "arkst-main.tar.gz"
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            tar_path.write_bytes(resp.read())
+
+                        if progress_cb:
+                            progress_cb(0.65, "Extracting update archive...")
+
+                        with tarfile.open(tar_path, "r:gz") as tar:
+                            tar.extractall(path=tmpdir)
+
+                        extracted_dir = Path(tmpdir) / "arkst-main"
+                        if not extracted_dir.exists():
+                            subdirs = [p for p in Path(tmpdir).iterdir() if p.is_dir()]
+                            extracted_dir = subdirs[0] if subdirs else Path(tmpdir)
+
+                        if progress_cb:
+                            progress_cb(0.85, "Updating ArkST core binaries...")
+
+                        files_to_update = [
+                            "arkst.py", "arkst_ui.py", "arkst_backend.py",
+                            "arkst_gtk_shim.py", "arkst-askpass",
+                            "arkst-icon.png", "arkst-icon.svg", "PKGBUILD"
+                        ]
+                        for fn in files_to_update:
+                            src_f = extracted_dir / fn
+                            dst_f = app_dir / fn
+                            if src_f.exists():
+                                try:
+                                    shutil.copy2(src_f, dst_f)
+                                except PermissionError:
+                                    subprocess.run(["sudo", "cp", "-f", str(src_f), str(dst_f)], check=True)
+
+                if progress_cb:
+                    progress_cb(1.0, "Update completed successfully!")
+
+                if completion_cb:
+                    completion_cb(True, "ArkST has been updated successfully! Please restart ArkST to apply changes.")
+            except Exception as e:
+                err_msg = str(e)
+                if progress_cb:
+                    progress_cb(1.0, f"Update failed: {err_msg}")
+                if completion_cb:
+                    completion_cb(False, f"Update failed: {err_msg}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    check_for_update = check_for_updates
+
+
 class FlatpakManager:
     """
     First-class Flathub & Flatpak Integration Engine for Ark Store:
@@ -6572,28 +6755,41 @@ class FlatpakManager:
         results: List[Dict[str, Any]] = []
         seen_ids: Set[str] = set()
 
-        # 1. Query Flathub API v2 / v1 when searching
+        # 1. Query Flathub API v2 when searching
         if q:
             try:
-                url = f"https://flathub.org/api/v1/apps/search/{urllib.parse.quote(q)}"
-                req = urllib.request.Request(url, headers={"User-Agent": "Ark-Store/3.0", "Accept": "application/json"})
+                url = "https://flathub.org/api/v2/search"
+                payload = json.dumps({"query": q}).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "ArkST/3.1.0",
+                        "Accept": "application/json"
+                    }
+                )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
-                    if isinstance(data, list):
-                        for item in data[:45]:
-                            app_id = (item.get("flatpakAppId") or item.get("id") or "").strip()
+                    hits = data.get("hits", []) if isinstance(data, dict) else []
+                    if isinstance(hits, list):
+                        for item in hits[:48]:
+                            app_id = (item.get("app_id") or item.get("id") or "").strip()
                             if not app_id or app_id.lower() in seen_ids:
                                 continue
                             seen_ids.add(app_id.lower())
                             curated = next((c for c in self.CURATED_FLATPAK_APPS if c["id"].lower() == app_id.lower()), None)
                             title = item.get("name") or (curated["title"] if curated else app_id.split(".")[-1])
-                            summary = item.get("summary") or (curated.get("summary", "") if curated else "Flathub application")
-                            icon_url = item.get("iconDesktopUrl") or item.get("iconMobileUrl") or ""
+                            raw_sum = item.get("summary") or item.get("description") or (curated.get("summary", "") if curated else "Flathub application")
+                            summary = re.sub(r'<[^>]+>', ' ', str(raw_sum)).strip()
+                            summary = re.sub(r'\s+', ' ', summary)
+                            icon_url = item.get("icon") or ""
                             if icon_url and icon_url.startswith("/"):
                                 icon_url = f"https://dl.flathub.org{icon_url}"
                             tail = app_id.split(".")[-1].lower()
                             icon = icon_url or (curated.get("icon") if curated else resolve_icon_name(tail, summary))
-                            ver = item.get("currentReleaseVersion") or (curated.get("version", "stable") if curated else "stable")
+                            ver = item.get("currentReleaseVersion") or item.get("version") or (curated.get("version", "stable") if curated else "stable")
+                            dev = item.get("developer_name") or (curated.get("publisher", "Flathub") if curated else "Flathub")
                             results.append({
                                 "id": app_id,
                                 "name": app_id,
@@ -6601,9 +6797,9 @@ class FlatpakManager:
                                 "display_name": title,
                                 "summary": summary,
                                 "desc": summary,
-                                "publisher": curated.get("publisher", "Flathub") if curated else "Flathub",
-                                "developer": curated.get("developer", "Flathub") if curated else "Flathub",
-                                "version": ver,
+                                "publisher": dev,
+                                "developer": dev,
+                                "version": str(ver),
                                 "category": curated.get("category", "Flathub App") if curated else "Flathub App",
                                 "icon": icon,
                                 "icon_url": icon_url,
