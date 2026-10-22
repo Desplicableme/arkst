@@ -3044,8 +3044,8 @@ class AuraWindow(Adw.ApplicationWindow):
         self._sync_responsive_cols()
 
     def _on_close_request(self, window) -> bool:
-        """Intercept window close: if transactions or tasks are active/queued, hide window, finish in background, then cleanly exit."""
-        if hasattr(self.pm, "has_active_tasks") and self.pm.has_active_tasks():
+        """Intercept window close: if transactions are actively running, hide window, finish in background, then cleanly exit."""
+        if hasattr(self.pm, "is_busy") and self.pm.is_busy():
             try:
                 active_tx = self.pm.get_active_transaction()
                 pkg = (active_tx.get("pkg_name") or "package") if isinstance(active_tx, dict) else "package"
@@ -3057,7 +3057,7 @@ class AuraWindow(Adw.ApplicationWindow):
             self.set_visible(False)
 
             def _poll_exit():
-                if self.pm.has_active_tasks():
+                if self.pm.is_busy():
                     return True  # Keep polling
                 try:
                     subprocess.Popen(["notify-send", "-a", "ArkST", "-i", "io.github.arkst", "ArkST", "All background package tasks completed."])
@@ -3070,6 +3070,11 @@ class AuraWindow(Adw.ApplicationWindow):
 
             GLib.timeout_add(1000, _poll_exit)
             return True  # Stop default close from destroying window immediately
+
+        # If no active transaction is running, cleanly quit the application
+        app = self.get_application()
+        if app:
+            app.quit()
         return False
 
     def _is_pkg_installed_unified(self, name: str, source: str = "pacman") -> bool:

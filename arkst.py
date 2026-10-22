@@ -169,25 +169,11 @@ class AuraApplication(Adw.Application):
                 pass
 
             try:
-                # 2. Remove legacy aura-box / ark-box and auto-initialize arkst-box if Docker is available
+                # 2. Clean legacy aura-box / ark-box and repair shortcuts
                 if hasattr(self.pm, "container_mgr"):
                     cm = self.pm.container_mgr
-                    migrated = list(_MIGRATED_DOCKER_APPS) + cm.migrate_legacy_containers()
-                    st = cm.get_status(force_refresh=True)
-                    if st.get("has_docker") and st.get("status_code") in ("missing_container", "stopped"):
-                        ok, _ = cm.ensure_container_configured()
-                        if ok and migrated:
-                            for app_id in set(migrated):
-                                cm.install_app(app_id)
-                        if self.window:
-                            GLib.idle_add(lambda: self.window._load_containers_view() if hasattr(self.window, "_load_containers_view") else False)
-            except Exception:
-                pass
-
-            try:
-                # 3. Always repair and synchronize Docker shortcuts on startup
-                if hasattr(self.pm, "container_mgr"):
-                    self.pm.container_mgr.repair_existing_shortcuts()
+                    cm.migrate_legacy_containers()
+                    cm.repair_existing_shortcuts()
             except Exception:
                 pass
 
@@ -199,6 +185,7 @@ class AuraApplication(Adw.Application):
             self.window = AuraWindow(self, self.pm)
             if self.initial_query:
                 self.window.search_entry.set_text(self.initial_query)
+        self.window.set_visible(True)
         self.window.present()
 
     def do_shutdown(self):
@@ -343,7 +330,7 @@ class AuraApplication(Adw.Application):
 
         if not self.window:
             self.window = AuraWindow(self, self.pm)
-            self.window.connect("close-request", lambda w: self.quit() if not self.pm.has_active_tasks() else True)
+        self.window.set_visible(True)
 
         if action == "discover":
             self.window.back_btn.set_visible(False)
@@ -424,6 +411,7 @@ class AuraApplication(Adw.Application):
             self.window.search_entry.set_text(query)
             self.window._trigger_search(query)
 
+        self.window.set_visible(True)
         self.window.present()
         return 0
 
